@@ -3,7 +3,10 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use roux::Subreddit;
-use roux::subreddit::responses::SubmissionsData;
+use roux::subreddit::responses::{
+    SubmissionsData,
+    comments::SubredditCommentsData,
+};
 use tokio;
 use tokio::time::{sleep, Duration};
 
@@ -26,7 +29,7 @@ impl Deref for Post {
 
 impl PartialEq for Post {
     fn eq(&self, other: &Self) -> bool {
-        self.url == other.url
+        self.id == other.id
     }
 }
 
@@ -34,12 +37,49 @@ impl Eq for Post {}
 
 impl Hash for Post {
     fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.url.hash(hasher);
+        self.id.hash(hasher);
     }
 }
 
-trait PostListener {
-    fn new_post(&self, subreddit: &Subreddit, data: &SubmissionsData);
+/*
+ * SubredditCommentsData does not implement Hash, so we wrap it into a
+ * custom type that automatially derefs into SubredditCommentsData.
+ */
+
+struct Comment(SubredditCommentsData);
+
+impl Deref for Comment {
+    type Target = SubredditCommentsData;
+
+    fn deref(&self) -> &SubredditCommentsData {
+        &self.0
+    }
+}
+
+impl PartialEq for Comment {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Comment {}
+
+impl Hash for Comment {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        self.id.hash(hasher);
+    }
+}
+
+trait Listener {
+    #[allow(unused_variables)]
+    fn new_post(&self, subreddit: &Subreddit, data: &SubmissionsData) {
+        // Default implementation does nothing
+    }
+
+    #[allow(unused_variables)]
+    fn new_comment(&self, subreddit: &Subreddit, data: &SubredditCommentsData) {
+        // Default implementation does nothing
+    }
 }
 
 
@@ -50,18 +90,18 @@ trait PostListener {
  */
 async fn stream_subreddit_posts(
     subreddit: &Subreddit,
-    listener: &dyn PostListener,
+    listener: &dyn Listener,
 ) {
     let mut seen_posts: HashSet<Post> = HashSet::new();
 
     loop {
-        println!("\nGetting latest posts...\n");
         let latest_posts: HashSet<Post> = subreddit
             .latest(25, None)
             .await
             .unwrap()
             .data
-            .children.into_iter()
+            .children
+            .into_iter()
             .map(|thing| Post(thing.data))
             .collect();
 
@@ -80,12 +120,49 @@ async fn stream_subreddit_posts(
 }
 
 
-struct MyPostListener {
+async fn stream_subreddit_comments(
+    subreddit: &Subreddit,
+    listener: &dyn Listener,
+) {
+    let mut seen_comments: HashSet<Comment> = HashSet::new();
+
+    loop {
+        let latest_comments: HashSet<Comment> = subreddit
+            .latest_comments(None, None)
+            .await
+            .unwrap()
+            .data
+            .children
+            .into_iter()
+            .map(|thing| Comment(thing.data))
+            .collect();
+
+        let new_comments: HashSet<_> = latest_comments
+            .difference(&seen_comments)
+            .collect();
+
+        for comment in new_comments {
+            listener.new_comment(subreddit, comment);
+        }
+
+        seen_comments = latest_comments;
+
+        // TODO: Adjust sleep duration based on number of new comments
+        sleep(Duration::from_secs(5)).await;
+    }
 }
 
-impl PostListener for MyPostListener {
-    fn new_post(&self, subreddit: &Subreddit, data: &SubmissionsData) {
-        println!("{}", data.title);
+
+struct MyListener {
+}
+
+impl Listener for MyListener {
+    fn new_post(&self, _subreddit: &Subreddit, data: &SubmissionsData) {
+        println!("New post by {}", data.author);
+    }
+
+    fn new_comment(&self, _subreddit: &Subreddit, data: &SubredditCommentsData) {
+        println!("New comment by {}", data.author.as_ref().unwrap());
     }
 }
 
@@ -93,8 +170,10 @@ impl PostListener for MyPostListener {
 #[tokio::main]
 async fn main() {
     let subreddit = Subreddit::new("AskReddit");
+    let listener = MyListener {};
 
-    let listener = MyPostListener {};
-
-    stream_subreddit_posts(&subreddit, &listener).await;
+    tokio::join!(
+        stream_subreddit_posts(&subreddit, &listener),
+        stream_subreddit_comments(&subreddit, &listener),
+    );
 }

@@ -38,19 +38,20 @@ impl Hash for Post {
     }
 }
 
+trait PostListener {
+    fn new_post(&self, subreddit: &Subreddit, data: &SubmissionsData);
+}
 
-#[tokio::main]
-async fn main() {
-    let subreddit = Subreddit::new("AskReddit");
 
-    /*
-     * Reddit's API does not offer a "firehose" style stream of new
-     * items, so we need to build that ourselves.
-     *
-     * The idea is to repeatedly get the latest items and remove those
-     * that we've already seen.
-     */
-
+/*
+ * Reddit's API does not offer a "firehose" style stream of new items,
+ * so we need to build that ourselves. The idea is to repeatedly get the
+ * latest items and remove those that we've already seen.
+ */
+async fn stream_subreddit_posts(
+    subreddit: &Subreddit,
+    listener: &dyn PostListener,
+) {
     let mut seen_posts: HashSet<Post> = HashSet::new();
 
     loop {
@@ -67,9 +68,8 @@ async fn main() {
         let new_posts: HashSet<_> = latest_posts
             .difference(&seen_posts)
             .collect();
-        println!("{} new posts:", new_posts.len());
         for post in new_posts {
-            println!("  {}", post.title);
+            listener.new_post(subreddit, post);
         }
 
         seen_posts = latest_posts;
@@ -77,4 +77,24 @@ async fn main() {
         // TODO: Adjust sleep duration based on number of new posts
         sleep(Duration::from_secs(5)).await;
     }
+}
+
+
+struct MyPostListener {
+}
+
+impl PostListener for MyPostListener {
+    fn new_post(&self, subreddit: &Subreddit, data: &SubmissionsData) {
+        println!("{}", data.title);
+    }
+}
+
+
+#[tokio::main]
+async fn main() {
+    let subreddit = Subreddit::new("AskReddit");
+
+    let listener = MyPostListener {};
+
+    stream_subreddit_posts(&subreddit, &listener).await;
 }

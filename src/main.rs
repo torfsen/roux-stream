@@ -1,6 +1,4 @@
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 
 use roux::Subreddit;
 use roux::subreddit::responses::{
@@ -10,65 +8,6 @@ use roux::subreddit::responses::{
 use tokio;
 use tokio::time::{sleep, Duration};
 
-
-
-/*
- * SubmissionsData does not implement Hash, so we wrap it into a custom
- * type that automatially derefs into SubmissionsData.
- */
-
-struct Post(SubmissionsData);
-
-impl Deref for Post {
-    type Target = SubmissionsData;
-
-    fn deref(&self) -> &SubmissionsData {
-        &self.0
-    }
-}
-
-impl PartialEq for Post {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Post {}
-
-impl Hash for Post {
-    fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.id.hash(hasher);
-    }
-}
-
-/*
- * SubredditCommentsData does not implement Hash, so we wrap it into a
- * custom type that automatially derefs into SubredditCommentsData.
- */
-
-struct Comment(SubredditCommentsData);
-
-impl Deref for Comment {
-    type Target = SubredditCommentsData;
-
-    fn deref(&self) -> &SubredditCommentsData {
-        &self.0
-    }
-}
-
-impl PartialEq for Comment {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Comment {}
-
-impl Hash for Comment {
-    fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.id.hash(hasher);
-    }
-}
 
 trait Listener {
     #[allow(unused_variables)]
@@ -92,27 +31,27 @@ async fn stream_subreddit_posts(
     subreddit: &Subreddit,
     listener: &dyn Listener,
 ) {
-    let mut seen_posts: HashSet<Post> = HashSet::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        let latest_posts: HashSet<Post> = subreddit
+        let latest_posts = subreddit
             .latest(25, None)
             .await
             .unwrap()
             .data
-            .children
-            .into_iter()
-            .map(|thing| Post(thing.data))
-            .collect();
+            .children;
 
-        let new_posts: HashSet<_> = latest_posts
-            .difference(&seen_posts)
-            .collect();
-        for post in new_posts {
-            listener.new_post(subreddit, post);
+        let mut latest_ids: HashSet<String> = HashSet::new();
+
+        for post in latest_posts {
+            let data = post.data;
+            latest_ids.insert(data.id.clone());
+            if !seen_ids.contains(&data.id) {
+                listener.new_post(subreddit, &data);
+            }
         }
 
-        seen_posts = latest_posts;
+        seen_ids = latest_ids;
 
         // TODO: Adjust sleep duration based on number of new posts
         sleep(Duration::from_secs(5)).await;
@@ -124,28 +63,28 @@ async fn stream_subreddit_comments(
     subreddit: &Subreddit,
     listener: &dyn Listener,
 ) {
-    let mut seen_comments: HashSet<Comment> = HashSet::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        let latest_comments: HashSet<Comment> = subreddit
+        let latest_comments = subreddit
             .latest_comments(None, None)
             .await
             .unwrap()
             .data
-            .children
-            .into_iter()
-            .map(|thing| Comment(thing.data))
-            .collect();
+            .children;
 
-        let new_comments: HashSet<_> = latest_comments
-            .difference(&seen_comments)
-            .collect();
+        let mut latest_ids: HashSet<String> = HashSet::new();
 
-        for comment in new_comments {
-            listener.new_comment(subreddit, comment);
+        for comment in latest_comments {
+            let data = comment.data;
+            let id = data.id.as_ref().cloned().unwrap();
+            latest_ids.insert(id.clone());
+            if !seen_ids.contains(&id) {
+                listener.new_comment(subreddit, &data);
+            }
         }
 
-        seen_comments = latest_comments;
+        seen_ids = latest_ids;
 
         // TODO: Adjust sleep duration based on number of new comments
         sleep(Duration::from_secs(5)).await;

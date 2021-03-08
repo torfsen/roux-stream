@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::marker::Unpin;
+use futures::{Sink, SinkExt};
 
 use roux::Subreddit;
 use roux::subreddit::responses::{
@@ -8,27 +10,14 @@ use roux::subreddit::responses::{
 use tokio::time::{sleep, Duration};
 
 
-pub trait Listener {
-    #[allow(unused_variables)]
-    fn new_post(&self, subreddit: &Subreddit, data: &SubmissionsData) {
-        // Default implementation does nothing
-    }
-
-    #[allow(unused_variables)]
-    fn new_comment(&self, subreddit: &Subreddit, data: &SubredditCommentsData) {
-        // Default implementation does nothing
-    }
-}
-
-
 /*
  * Reddit's API does not offer a "firehose" style stream of new items,
  * so we need to build that ourselves. The idea is to repeatedly get the
  * latest items and remove those that we've already seen.
  */
-pub async fn stream_subreddit_posts(
+pub async fn stream_subreddit_submissions(
     subreddit: &Subreddit,
-    listener: &dyn Listener,
+    mut sink: impl Sink<SubmissionsData> + Unpin,
 ) {
     let mut seen_ids: HashSet<String> = HashSet::new();
 
@@ -46,7 +35,7 @@ pub async fn stream_subreddit_posts(
             let data = post.data;
             latest_ids.insert(data.id.clone());
             if !seen_ids.contains(&data.id) {
-                listener.new_post(subreddit, &data);
+                sink.send(data).await.unwrap_or_else(|_| panic!("Send failed"));
             }
         }
 
@@ -60,7 +49,7 @@ pub async fn stream_subreddit_posts(
 
 pub async fn stream_subreddit_comments(
     subreddit: &Subreddit,
-    listener: &dyn Listener,
+    mut sink: impl Sink<SubredditCommentsData> + Unpin,
 ) {
     let mut seen_ids: HashSet<String> = HashSet::new();
 
@@ -79,7 +68,7 @@ pub async fn stream_subreddit_comments(
             let id = data.id.as_ref().cloned().unwrap();
             latest_ids.insert(id.clone());
             if !seen_ids.contains(&id) {
-                listener.new_comment(subreddit, &data);
+                sink.send(data).await.unwrap_or_else(|_| panic!("Send failed"));
             }
         }
 

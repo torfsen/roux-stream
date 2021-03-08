@@ -22,20 +22,22 @@ pub async fn stream_subreddit_submissions(
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        let latest_posts = subreddit
+        let latest_submissions = subreddit
             .latest(25, None)
             .await
             .unwrap()
             .data
-            .children;
+            .children
+            .into_iter()
+            .map(|thing| thing.data);
 
         let mut latest_ids: HashSet<String> = HashSet::new();
 
-        for post in latest_posts {
-            let data = post.data;
-            latest_ids.insert(data.id.clone());
-            if !seen_ids.contains(&data.id) {
-                sink.send(data).await.unwrap_or_else(|_| panic!("Send failed"));
+
+        for submission in latest_submissions {
+            latest_ids.insert(submission.id.clone());
+            if !seen_ids.contains(&submission.id) {
+                sink.send(submission).await.unwrap_or_else(|_| panic!("Send failed"));
             }
         }
 
@@ -59,16 +61,17 @@ pub async fn stream_subreddit_comments(
             .await
             .unwrap()
             .data
-            .children;
+            .children
+            .into_iter()
+            .map(|thing| thing.data);
 
         let mut latest_ids: HashSet<String> = HashSet::new();
 
         for comment in latest_comments {
-            let data = comment.data;
-            let id = data.id.as_ref().cloned().unwrap();
+            let id = comment.id.as_ref().cloned().unwrap();
             latest_ids.insert(id.clone());
             if !seen_ids.contains(&id) {
-                sink.send(data).await.unwrap_or_else(|_| panic!("Send failed"));
+                sink.send(comment).await.unwrap_or_else(|_| panic!("Send failed"));
             }
         }
 

@@ -18,12 +18,15 @@ use tokio::time::{sleep, Duration};
 pub async fn stream_subreddit_submissions(
     subreddit: &Subreddit,
     mut sink: impl Sink<SubmissionsData> + Unpin,
+    sleep_time: Duration,
 ) {
+    // How many submissions to fetch per request
+    const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
-
     loop {
+        // TODO: Retry on connection issues
         let latest_submissions = subreddit
-            .latest(25, None)
+            .latest(LIMIT, None)
             .await
             .unwrap()
             .data
@@ -33,18 +36,17 @@ pub async fn stream_subreddit_submissions(
 
         let mut latest_ids: HashSet<String> = HashSet::new();
 
-
         for submission in latest_submissions {
             latest_ids.insert(submission.id.clone());
             if !seen_ids.contains(&submission.id) {
+                // TODO: Let this error bubble up
                 sink.send(submission).await.unwrap_or_else(|_| panic!("Send failed"));
             }
         }
-
+        // TODO: Should we notify the caller if all latest submissions are new,
+        //       indicating a too long sleep_time, and if so, how?
         seen_ids = latest_ids;
-
-        // TODO: Adjust sleep duration based on number of new posts
-        sleep(Duration::from_secs(5)).await;
+        sleep(sleep_time).await;
     }
 }
 
@@ -52,12 +54,14 @@ pub async fn stream_subreddit_submissions(
 pub async fn stream_subreddit_comments(
     subreddit: &Subreddit,
     mut sink: impl Sink<SubredditCommentsData> + Unpin,
+    sleep_time: Duration,
 ) {
+    // How many comments to fetch per request
+    const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
-
     loop {
         let latest_comments = subreddit
-            .latest_comments(None, None)
+            .latest_comments(None, Some(LIMIT))
             .await
             .unwrap()
             .data
@@ -74,10 +78,7 @@ pub async fn stream_subreddit_comments(
                 sink.send(comment).await.unwrap_or_else(|_| panic!("Send failed"));
             }
         }
-
         seen_ids = latest_ids;
-
-        // TODO: Adjust sleep duration based on number of new comments
-        sleep(Duration::from_secs(5)).await;
+        sleep(sleep_time).await;
     }
 }

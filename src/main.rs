@@ -1,6 +1,7 @@
 use futures::{Stream, StreamExt, channel::mpsc};
 use roux::{Subreddit, subreddit::responses::{SubmissionsData, SubredditCommentsData}};
 use tokio;
+use tokio::time::Duration;
 
 use subreddit_dumper;
 
@@ -25,9 +26,17 @@ async fn main() {
     let (mut comment_sender, mut comment_receiver) = mpsc::unbounded();
 
     tokio::join!(
-        subreddit_dumper::stream_subreddit_submissions(&subreddit, &mut submission_sender),
+        subreddit_dumper::stream_subreddit_submissions(
+            &subreddit,
+            &mut submission_sender,
+            Duration::from_secs(60),
+        ),
         submission_reader(&mut submission_receiver),
-        subreddit_dumper::stream_subreddit_comments(&subreddit, &mut comment_sender),
+        subreddit_dumper::stream_subreddit_comments(
+            &subreddit,
+            &mut comment_sender,
+            Duration::from_secs(15),
+        ),
         comment_reader(&mut comment_receiver),
     );
 }

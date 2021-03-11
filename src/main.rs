@@ -20,6 +20,13 @@ async fn comment_reader(stream: &mut (dyn Stream<Item=SubredditCommentsData> + U
 
 #[tokio::main]
 async fn main() {
+    // Initialize logging
+    stderrlog::new()
+        .module(module_path!())
+        .verbosity(3)
+        .init()
+        .unwrap();
+
     let subreddit = Subreddit::new("AskReddit");
 
     let (mut submission_sender, mut submission_receiver) = mpsc::unbounded();

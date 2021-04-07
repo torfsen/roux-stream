@@ -32,7 +32,7 @@ async fn main() {
     let (mut submission_sender, mut submission_receiver) = mpsc::unbounded();
     let (mut comment_sender, mut comment_receiver) = mpsc::unbounded();
 
-    tokio::join!(
+    let (submission_res, _, comment_res, _) = tokio::join!(
         subreddit_dumper::stream_subreddit_submissions(
             &subreddit,
             &mut submission_sender,
@@ -46,4 +46,6 @@ async fn main() {
         ),
         comment_reader(&mut comment_receiver),
     );
+    submission_res.unwrap();
+    comment_res.unwrap();
 }

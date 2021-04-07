@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::marker::Unpin;
 use futures::{Sink, SinkExt};
 use log::{debug, warn};
-use roux::Subreddit;
+use roux::{Subreddit, util::RouxError};
 use roux::subreddit::responses::{
     SubmissionsData,
     comments::SubredditCommentsData,
@@ -10,16 +10,21 @@ use roux::subreddit::responses::{
 use tokio::time::{sleep, Duration};
 
 
-/*
- * Reddit's API does not offer a "firehose" style stream of new items,
- * so we need to build that ourselves. The idea is to repeatedly get the
- * latest items and remove those that we've already seen.
- */
-pub async fn stream_subreddit_submissions(
+#[derive(Debug)]
+pub enum SubmissionStreamError<S>
+where S: Sink<SubmissionsData> + Unpin
+{
+    Roux(RouxError),
+    Sink(S::Error),
+}
+
+pub async fn stream_subreddit_submissions<S>(
     subreddit: &Subreddit,
-    mut sink: impl Sink<SubmissionsData> + Unpin,
+    mut sink: S,
     sleep_time: Duration,
-) {
+) -> Result<(), SubmissionStreamError<S>>
+where S: Sink<SubmissionsData> + Unpin
+{
     // How many submissions to fetch per request
     const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -28,7 +33,7 @@ pub async fn stream_subreddit_submissions(
         let latest_submissions = subreddit
             .latest(LIMIT, None)
             .await
-            .unwrap()
+            .map_err(SubmissionStreamError::Roux)?
             .data
             .children
             .into_iter()
@@ -41,8 +46,7 @@ pub async fn stream_subreddit_submissions(
             latest_ids.insert(submission.id.clone());
             if !seen_ids.contains(&submission.id) {
                 num_new += 1;
-                // TODO: Let this error bubble up
-                sink.send(submission).await.unwrap_or_else(|_| panic!("Send failed"));
+                sink.send(submission).await.map_err(SubmissionStreamError::Sink)?
             }
         }
 
@@ -56,12 +60,21 @@ pub async fn stream_subreddit_submissions(
     }
 }
 
+#[derive(Debug)]
+pub enum CommentStreamError<S>
+where S: Sink<SubredditCommentsData> + Unpin
+{
+    Roux(RouxError),
+    Sink(S::Error),
+}
 
-pub async fn stream_subreddit_comments(
+pub async fn stream_subreddit_comments<S>(
     subreddit: &Subreddit,
-    mut sink: impl Sink<SubredditCommentsData> + Unpin,
+    mut sink: S,
     sleep_time: Duration,
-) {
+) -> Result<(), CommentStreamError<S>>
+where S: Sink<SubredditCommentsData> + Unpin
+{
     // How many comments to fetch per request
     const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -69,7 +82,7 @@ pub async fn stream_subreddit_comments(
         let latest_comments = subreddit
             .latest_comments(None, Some(LIMIT))
             .await
-            .unwrap()
+            .map_err(CommentStreamError::Roux)?
             .data
             .children
             .into_iter()
@@ -83,7 +96,7 @@ pub async fn stream_subreddit_comments(
             latest_ids.insert(id.clone());
             if !seen_ids.contains(&id) {
                 num_new += 1;
-                sink.send(comment).await.unwrap_or_else(|_| panic!("Send failed"));
+                sink.send(comment).await.map_err(CommentStreamError::Sink)?;
             }
         }
 

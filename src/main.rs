@@ -6,13 +6,17 @@ use tokio::time::Duration;
 use subreddit_dumper;
 
 
-async fn submission_reader(stream: &mut (dyn Stream<Item=SubmissionsData> + Unpin)) {
+async fn submission_reader<S>(stream: &mut S)
+where S: Stream<Item=SubmissionsData> + Unpin
+{
     while let Some(submission) = stream.next().await {
         println!("New submission by {}", submission.author);
     }
 }
 
-async fn comment_reader(stream: &mut (dyn Stream<Item=SubredditCommentsData> + Unpin)) {
+async fn comment_reader<S>(stream: &mut S)
+where S: Stream<Item=SubredditCommentsData> + Unpin
+{
     while let Some(comment) = stream.next().await {
         println!("New comment by {}", comment.author.as_ref().unwrap());
     }

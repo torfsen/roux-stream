@@ -1,14 +1,17 @@
-use futures::{Stream, StreamExt, channel::mpsc};
-use roux::{Subreddit, subreddit::responses::{SubmissionsData, SubredditCommentsData}};
+use futures::{channel::mpsc, Stream, StreamExt};
+use roux::{
+    subreddit::responses::{SubmissionsData, SubredditCommentsData},
+    Subreddit,
+};
 use tokio;
-use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tokio::time::Duration;
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
 
 use subreddit_dumper;
 
-
 async fn submission_reader<S>(stream: &mut S)
-where S: Stream<Item=SubmissionsData> + Unpin
+where
+    S: Stream<Item = SubmissionsData> + Unpin,
 {
     while let Some(submission) = stream.next().await {
         println!("New submission by {}", submission.author);
@@ -16,7 +19,8 @@ where S: Stream<Item=SubmissionsData> + Unpin
 }
 
 async fn comment_reader<S>(stream: &mut S)
-where S: Stream<Item=SubredditCommentsData> + Unpin
+where
+    S: Stream<Item = SubredditCommentsData> + Unpin,
 {
     while let Some(comment) = stream.next().await {
         println!("New comment by {}", comment.author.as_ref().unwrap());
@@ -39,7 +43,7 @@ async fn main() {
 
     let retry_strategy = ExponentialBackoff::from_millis(100)
         .map(jitter) // add jitter to delays
-        .take(3);    // limit to 3 retries
+        .take(3); // limit to 3 retries
 
     let (submission_res, _, comment_res, _) = tokio::join!(
         subreddit_dumper::stream_subreddit_submissions(

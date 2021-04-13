@@ -1,18 +1,16 @@
-use std::collections::HashSet;
-use std::marker::Unpin;
 use futures::{Sink, SinkExt};
 use log::{debug, warn};
-use roux::{Subreddit, util::RouxError};
-use roux::subreddit::responses::{
-    SubmissionsData,
-    comments::SubredditCommentsData,
-};
+use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
+use roux::{util::RouxError, Subreddit};
+use std::collections::HashSet;
+use std::marker::Unpin;
 use tokio::time::{sleep, Duration};
 use tokio_retry::Retry;
 
 #[derive(Debug)]
 pub enum SubmissionStreamError<S>
-where S: Sink<SubmissionsData> + Unpin
+where
+    S: Sink<SubmissionsData> + Unpin,
 {
     Roux(RouxError),
     Sink(S::Error),
@@ -34,16 +32,14 @@ where
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        let latest_submissions =  Retry::spawn(
-                retry_strategy.clone(),
-                || subreddit.latest(LIMIT, None),
-            )
-            .await
-            .map_err(SubmissionStreamError::Roux)?
-            .data
-            .children
-            .into_iter()
-            .map(|thing| thing.data);
+        let latest_submissions =
+            Retry::spawn(retry_strategy.clone(), || subreddit.latest(LIMIT, None))
+                .await
+                .map_err(SubmissionStreamError::Roux)?
+                .data
+                .children
+                .into_iter()
+                .map(|thing| thing.data);
 
         let mut latest_ids: HashSet<String> = HashSet::new();
 
@@ -52,7 +48,9 @@ where
             latest_ids.insert(submission.id.clone());
             if !seen_ids.contains(&submission.id) {
                 num_new += 1;
-                sink.send(submission).await.map_err(SubmissionStreamError::Sink)?
+                sink.send(submission)
+                    .await
+                    .map_err(SubmissionStreamError::Sink)?
             }
         }
 
@@ -68,7 +66,8 @@ where
 
 #[derive(Debug)]
 pub enum CommentStreamError<S>
-where S: Sink<SubredditCommentsData> + Unpin
+where
+    S: Sink<SubredditCommentsData> + Unpin,
 {
     Roux(RouxError),
     Sink(S::Error),
@@ -89,16 +88,15 @@ where
     const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
     loop {
-        let latest_comments = Retry::spawn(
-                retry_strategy.clone(),
-                || subreddit.latest_comments(None, Some(LIMIT)),
-            )
-            .await
-            .map_err(CommentStreamError::Roux)?
-            .data
-            .children
-            .into_iter()
-            .map(|thing| thing.data);
+        let latest_comments = Retry::spawn(retry_strategy.clone(), || {
+            subreddit.latest_comments(None, Some(LIMIT))
+        })
+        .await
+        .map_err(CommentStreamError::Roux)?
+        .data
+        .children
+        .into_iter()
+        .map(|thing| thing.data);
 
         let mut latest_ids: HashSet<String> = HashSet::new();
 

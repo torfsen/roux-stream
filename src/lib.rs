@@ -8,7 +8,7 @@ use roux::subreddit::responses::{
     comments::SubredditCommentsData,
 };
 use tokio::time::{sleep, Duration};
-
+use tokio_retry::Retry;
 
 #[derive(Debug)]
 pub enum SubmissionStreamError<S>
@@ -18,20 +18,26 @@ where S: Sink<SubmissionsData> + Unpin
     Sink(S::Error),
 }
 
-pub async fn stream_subreddit_submissions<S>(
+pub async fn stream_subreddit_submissions<S, R, I>(
     subreddit: &Subreddit,
     mut sink: S,
     sleep_time: Duration,
+    retry_strategy: &R,
 ) -> Result<(), SubmissionStreamError<S>>
-where S: Sink<SubmissionsData> + Unpin
+where
+    S: Sink<SubmissionsData> + Unpin,
+    R: IntoIterator<IntoIter = I, Item = Duration> + Clone,
+    I: Iterator<Item = Duration>,
 {
     // How many submissions to fetch per request
     const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
+
     loop {
-        // TODO: Retry on connection issues
-        let latest_submissions = subreddit
-            .latest(LIMIT, None)
+        let latest_submissions =  Retry::spawn(
+                retry_strategy.clone(),
+                || subreddit.latest(LIMIT, None),
+            )
             .await
             .map_err(SubmissionStreamError::Roux)?
             .data
@@ -68,19 +74,25 @@ where S: Sink<SubredditCommentsData> + Unpin
     Sink(S::Error),
 }
 
-pub async fn stream_subreddit_comments<S>(
+pub async fn stream_subreddit_comments<S, R, I>(
     subreddit: &Subreddit,
     mut sink: S,
     sleep_time: Duration,
+    retry_strategy: &R,
 ) -> Result<(), CommentStreamError<S>>
-where S: Sink<SubredditCommentsData> + Unpin
+where
+    S: Sink<SubredditCommentsData> + Unpin,
+    R: IntoIterator<IntoIter = I, Item = Duration> + Clone,
+    I: Iterator<Item = Duration>,
 {
     // How many comments to fetch per request
     const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
     loop {
-        let latest_comments = subreddit
-            .latest_comments(None, Some(LIMIT))
+        let latest_comments = Retry::spawn(
+                retry_strategy.clone(),
+                || subreddit.latest_comments(None, Some(LIMIT)),
+            )
             .await
             .map_err(CommentStreamError::Roux)?
             .data

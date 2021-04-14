@@ -14,7 +14,10 @@ where
     S: Stream<Item = SubmissionsData> + Unpin,
 {
     while let Some(submission) = stream.next().await {
-        println!("New submission by {}", submission.author);
+        println!(
+            "New submission in r/{} by {}",
+            submission.subreddit, submission.author
+        );
     }
 }
 
@@ -23,7 +26,11 @@ where
     S: Stream<Item = SubredditCommentsData> + Unpin,
 {
     while let Some(comment) = stream.next().await {
-        println!("New comment by {}", comment.author.as_ref().unwrap());
+        println!(
+            "New comment in r/{} by {}",
+            comment.subreddit.unwrap(),
+            comment.author.unwrap()
+        );
     }
 }
 

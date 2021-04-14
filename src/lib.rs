@@ -54,9 +54,15 @@ where
             }
         }
 
-        debug!("Got {} new items (out of {})", num_new, LIMIT);
+        debug!(
+            "Got {} new submissions for r/{} (out of {})",
+            num_new, subreddit.name, LIMIT
+        );
         if num_new == LIMIT && !seen_ids.is_empty() {
-            warn!("All received items were new, try a shorter sleep_time");
+            warn!(
+                "All received submissions for r/{} were new, try a shorter sleep_time",
+                subreddit.name
+            );
         }
 
         seen_ids = latest_ids;
@@ -110,9 +116,15 @@ where
             }
         }
 
-        debug!("Got {} new items (out of {})", num_new, LIMIT);
+        debug!(
+            "Got {} new comments for r/{} (out of {})",
+            num_new, subreddit.name, LIMIT
+        );
         if num_new == LIMIT && !seen_ids.is_empty() {
-            warn!("All received items were new, try a shorter sleep_time");
+            warn!(
+                "All received comments for r/{} were new, try a shorter sleep_time",
+                subreddit.name
+            );
         }
 
         seen_ids = latest_ids;

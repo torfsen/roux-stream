@@ -1,3 +1,21 @@
+#![warn(missing_docs)]
+
+/*!
+Streaming API for `roux`
+
+Reddit's API does not provide "firehose"-style streaming of new posts and
+comments. Instead, the endpoints for retrieving the latest posts and comments
+have to be polled regularly. This crate automates that task and provides streams
+for a subreddit's posts (submissions) and comments.
+
+See [`stream_subreddit_submissions`] and [`stream_subreddit_comments`] for
+details.
+
+# Logging
+
+This module uses the logging infrastructure provided by the [`log`] crate.
+*/
+
 use futures::{Sink, SinkExt};
 use log::{debug, warn};
 use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
@@ -7,15 +25,36 @@ use std::marker::Unpin;
 use tokio::time::{sleep, Duration};
 use tokio_retry::Retry;
 
+// TODO: Tests
+
+/// Error that may happen when streaming submissions
 #[derive(Debug)]
 pub enum SubmissionStreamError<S>
 where
     S: Sink<SubmissionsData> + Unpin,
 {
+    /// An issue with getting the data from Reddit
     Roux(RouxError),
+
+    /// An issue with sending the data through the sink
     Sink(S::Error),
 }
 
+/**
+Stream new submissions in a subreddit
+
+The subreddit is polled regularly for new submissions, and each previously
+unseen submission is sent into the sink.
+
+`sleep_time` controls the interval between calls to the Reddit API, and depends
+on how much traffic the subreddit has. Each call fetches the 100 latest items
+(the maximum number allowed by Reddit). A warning is logged if none of those
+items has been seen in the previous call: this indicates a potential miss of new
+content and suggests that a smaller `sleep_time` should be chosen.
+
+`retry_strategy` controls how to deal with errors that occur while fetching
+content from Reddit. See [`tokio_retry::strategy`].
+*/
 pub async fn stream_subreddit_submissions<S, R, I>(
     subreddit: &Subreddit,
     mut sink: S,
@@ -70,15 +109,34 @@ where
     }
 }
 
+/// Error that may happen when streaming comments
 #[derive(Debug)]
 pub enum CommentStreamError<S>
 where
     S: Sink<SubredditCommentsData> + Unpin,
 {
+    /// An issue with getting the data from Reddit
     Roux(RouxError),
+
+    /// An issue with sending the data through the sink
     Sink(S::Error),
 }
 
+/**
+Stream new comments in a subreddit
+
+The subreddit is polled regularly for new comments, and each previously
+unseen comment is sent into the sink.
+
+`sleep_time` controls the interval between calls to the Reddit API, and depends
+on how much traffic the subreddit has. Each call fetches the 100 latest items
+(the maximum number allowed by Reddit). A warning is logged if none of those
+items has been seen in the previous call: this indicates a potential miss of new
+content and suggests that a smaller `sleep_time` should be chosen.
+
+`retry_strategy` controls how to deal with errors that occur while fetching
+content from Reddit. See [`tokio_retry::strategy`].
+*/
 pub async fn stream_subreddit_comments<S, R, I>(
     subreddit: &Subreddit,
     mut sink: S,

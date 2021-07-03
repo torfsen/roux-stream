@@ -16,7 +16,8 @@ details.
 This module uses the logging infrastructure provided by the [`log`] crate.
 */
 
-use futures::{Sink, SinkExt};
+use futures::channel::mpsc;
+use futures::{Sink, SinkExt, Stream};
 use log::{debug, warn};
 use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
 use roux::{util::RouxError, Subreddit};
@@ -40,39 +41,20 @@ where
     Sink(S::Error),
 }
 
-/**
-Stream new submissions in a subreddit
-
-The subreddit is polled regularly for new submissions, and each previously
-unseen submission is sent into the sink.
-
-`sleep_time` controls the interval between calls to the Reddit API, and depends
-on how much traffic the subreddit has. Each call fetches the 100 latest items
-(the maximum number allowed by Reddit). A warning is logged if none of those
-items has been seen in the previous call: this indicates a potential miss of new
-content and suggests that a smaller `sleep_time` should be chosen.
-
-`retry_strategy` controls how to deal with errors that occur while fetching
-content from Reddit. See [`tokio_retry::strategy`].
-*/
-pub async fn stream_subreddit_submissions<S, R, I>(
-    subreddit: &Subreddit,
-    mut sink: S,
+async fn _pull_submissions_into_sink<S>(
+    subreddit: Subreddit,
     sleep_time: Duration,
-    retry_strategy: &R,
+    mut sink: S,
 ) -> Result<(), SubmissionStreamError<S>>
 where
     S: Sink<SubmissionsData> + Unpin,
-    R: IntoIterator<IntoIter = I, Item = Duration> + Clone,
-    I: Iterator<Item = Duration>,
 {
     // How many submissions to fetch per request
     const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        let latest_submissions =
-            Retry::spawn(retry_strategy.clone(), || subreddit.latest(LIMIT, None))
+        let latest_submissions = subreddit.latest(LIMIT, None)
                 .await
                 .map_err(SubmissionStreamError::Roux)?
                 .data
@@ -108,6 +90,40 @@ where
         sleep(sleep_time).await;
     }
 }
+
+
+/**
+Stream new submissions in a subreddit
+
+The subreddit is polled regularly for new submissions, and each previously
+unseen submission is sent into the returned stream.
+
+`sleep_time` controls the interval between calls to the Reddit API, and depends
+on how much traffic the subreddit has. Each call fetches the 100 latest items
+(the maximum number allowed by Reddit). A warning is logged if none of those
+items has been seen in the previous call: this indicates a potential miss of new
+content and suggests that a smaller `sleep_time` should be chosen.
+*/
+pub fn stream_submissions(
+    subreddit: &Subreddit,
+    sleep_time: Duration,
+) -> impl Stream<Item=SubmissionsData>
+{
+    let (sink, stream) = mpsc::unbounded();
+    tokio::spawn(
+        _pull_submissions_into_sink(
+            // We need an owned instance (or at least statically bound
+            // reference) for tokio::spawn. Since Subreddit isn't Copy
+            // or Clone, we simply create a new instance.
+            Subreddit::new(subreddit.name.as_str()),
+            sleep_time,
+            sink,
+        )
+    );
+    stream
+}
+
+
 
 /// Error that may happen when streaming comments
 #[derive(Debug)]

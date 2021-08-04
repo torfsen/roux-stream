@@ -41,13 +41,16 @@ where
     Sink(S::Error),
 }
 
-async fn _pull_submissions_into_sink<S>(
+async fn _pull_submissions_into_sink<S, R, I>(
     subreddit: Subreddit,
     sleep_time: Duration,
+    retry_strategy: R,
     mut sink: S,
 ) -> Result<(), S::Error>
 where
     S: Sink<Result<SubmissionsData, RouxError>> + Unpin,
+    R: IntoIterator<IntoIter = I, Item = Duration> + Clone,
+    I: Iterator<Item = Duration>,
 {
     // How many submissions to fetch per request
     const LIMIT: u32 = 100;
@@ -55,7 +58,9 @@ where
 
     loop {
         debug!("Fetching latest submissions from r/{}", subreddit.name);
-        let latest = subreddit.latest(LIMIT, None).await;
+        let latest = Retry::spawn(retry_strategy.clone(), || {
+            subreddit.latest(LIMIT, None)
+        }).await;
         match latest {
             Ok(latest_submissions) => {
                 let latest_submissions = latest_submissions
@@ -114,10 +119,15 @@ on how much traffic the subreddit has. Each call fetches the 100 latest items
 items has been seen in the previous call: this indicates a potential miss of new
 content and suggests that a smaller `sleep_time` should be chosen.
 */
-pub fn stream_submissions(
+pub fn stream_submissions<R, I>(
     subreddit: &Subreddit,
     sleep_time: Duration,
-) -> impl Stream<Item = Result<SubmissionsData, RouxError>> {
+    retry_strategy: R,
+) -> impl Stream<Item = Result<SubmissionsData, RouxError>>
+where
+    R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
+    I: Iterator<Item = Duration> + Send + Sync + 'static,
+{
     let (sink, stream) = mpsc::unbounded();
     tokio::spawn(_pull_submissions_into_sink(
         // We need an owned instance (or at least statically bound
@@ -125,6 +135,7 @@ pub fn stream_submissions(
         // or Clone, we simply create a new instance.
         Subreddit::new(subreddit.name.as_str()),
         sleep_time,
+        retry_strategy,
         sink,
     ));
     stream

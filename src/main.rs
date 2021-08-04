@@ -61,7 +61,7 @@ async fn main() {
     let mut submissions_stream = subreddit_dumper::stream_submissions(
         &subreddit,
         Duration::from_secs(10),
-        //&retry_strategy,
+        retry_strategy,
     );
 
     let (submission_result /*comment_res , _*/,) = tokio::join!(

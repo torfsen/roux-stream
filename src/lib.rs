@@ -45,52 +45,62 @@ async fn _pull_submissions_into_sink<S>(
     subreddit: Subreddit,
     sleep_time: Duration,
     mut sink: S,
-) -> Result<(), SubmissionStreamError<S>>
+) -> Result<(), S::Error>
 where
-    S: Sink<SubmissionsData> + Unpin,
+    S: Sink<Result<SubmissionsData, RouxError>> + Unpin,
 {
     // How many submissions to fetch per request
     const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        let latest_submissions = subreddit.latest(LIMIT, None)
-                .await
-                .map_err(SubmissionStreamError::Roux)?
-                .data
-                .children
-                .into_iter()
-                .map(|thing| thing.data);
+        debug!("Fetching latest submissions from r/{}", subreddit.name);
+        let latest = subreddit.latest(LIMIT, None).await;
+        match latest {
+            Ok(latest_submissions) => {
+                let latest_submissions = latest_submissions
+                    .data
+                    .children
+                    .into_iter()
+                    .map(|thing| thing.data);
 
-        let mut latest_ids: HashSet<String> = HashSet::new();
+                let mut latest_ids: HashSet<String> = HashSet::new();
 
-        let mut num_new = 0;
-        for submission in latest_submissions {
-            latest_ids.insert(submission.id.clone());
-            if !seen_ids.contains(&submission.id) {
-                num_new += 1;
-                sink.send(submission)
-                    .await
-                    .map_err(SubmissionStreamError::Sink)?
+                let mut num_new = 0;
+                for submission in latest_submissions {
+                    latest_ids.insert(submission.id.clone());
+                    if !seen_ids.contains(&submission.id) {
+                        num_new += 1;
+                        sink.send(Ok(submission)).await?;
+                    }
+                }
+
+                debug!(
+                    "Got {} new submissions for r/{} (out of {})",
+                    num_new, subreddit.name, LIMIT
+                );
+                if num_new == LIMIT && !seen_ids.is_empty() {
+                    warn!(
+                        "All received submissions for r/{} were new, try a shorter sleep_time",
+                        subreddit.name
+                    );
+                }
+
+                seen_ids = latest_ids;
+            }
+            Err(error) => {
+                // Forward the error through the stream
+                warn!(
+                    "Error while fetching the latest submissions from r/{}: {}",
+                    subreddit.name, error,
+                );
+                sink.send(Err(error)).await?;
             }
         }
 
-        debug!(
-            "Got {} new submissions for r/{} (out of {})",
-            num_new, subreddit.name, LIMIT
-        );
-        if num_new == LIMIT && !seen_ids.is_empty() {
-            warn!(
-                "All received submissions for r/{} were new, try a shorter sleep_time",
-                subreddit.name
-            );
-        }
-
-        seen_ids = latest_ids;
         sleep(sleep_time).await;
     }
 }
-
 
 /**
 Stream new submissions in a subreddit
@@ -107,23 +117,18 @@ content and suggests that a smaller `sleep_time` should be chosen.
 pub fn stream_submissions(
     subreddit: &Subreddit,
     sleep_time: Duration,
-) -> impl Stream<Item=SubmissionsData>
-{
+) -> impl Stream<Item = Result<SubmissionsData, RouxError>> {
     let (sink, stream) = mpsc::unbounded();
-    tokio::spawn(
-        _pull_submissions_into_sink(
-            // We need an owned instance (or at least statically bound
-            // reference) for tokio::spawn. Since Subreddit isn't Copy
-            // or Clone, we simply create a new instance.
-            Subreddit::new(subreddit.name.as_str()),
-            sleep_time,
-            sink,
-        )
-    );
+    tokio::spawn(_pull_submissions_into_sink(
+        // We need an owned instance (or at least statically bound
+        // reference) for tokio::spawn. Since Subreddit isn't Copy
+        // or Clone, we simply create a new instance.
+        Subreddit::new(subreddit.name.as_str()),
+        sleep_time,
+        sink,
+    ));
     stream
 }
-
-
 
 /// Error that may happen when streaming comments
 #[derive(Debug)]

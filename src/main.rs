@@ -1,6 +1,9 @@
+use std::io::Error;
+
 use futures::{channel::mpsc, Stream, StreamExt};
 use roux::{
     subreddit::responses::{SubmissionsData, SubredditCommentsData},
+    util::RouxError,
     Subreddit,
 };
 use tokio;
@@ -9,16 +12,20 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 
 use subreddit_dumper;
 
-async fn submission_reader<S>(stream: &mut S)
+async fn submission_reader<S>(stream: &mut S) -> Result<(), RouxError>
 where
-    S: Stream<Item = SubmissionsData> + Unpin,
+    S: Stream<Item = Result<SubmissionsData, RouxError>> + Unpin,
 {
     while let Some(submission) = stream.next().await {
-        println!(
-            "New submission in r/{} by {}",
-            submission.subreddit, submission.author
-        );
+        match submission {
+            Ok(submission) => println!(
+                "New submission in r/{} by {}",
+                submission.subreddit, submission.author
+            ),
+            Err(error) => return Err(error),
+        }
     }
+    Ok(())
 }
 
 async fn comment_reader<S>(stream: &mut S)
@@ -45,7 +52,7 @@ async fn main() {
 
     let subreddit = Subreddit::new("AskReddit");
 
-    let (mut comment_sender, mut comment_receiver) = mpsc::unbounded();
+    //let (mut comment_sender, mut comment_receiver) = mpsc::unbounded();
 
     let retry_strategy = ExponentialBackoff::from_millis(100)
         .map(jitter) // add jitter to delays
@@ -53,11 +60,13 @@ async fn main() {
 
     let mut submissions_stream = subreddit_dumper::stream_submissions(
         &subreddit,
-        Duration::from_secs(60),
+        Duration::from_secs(10),
+        //&retry_strategy,
     );
 
-    let (_, comment_res , _) = tokio::join!(
+    let (submission_result /*comment_res , _*/,) = tokio::join!(
         submission_reader(&mut submissions_stream),
+        /*
         subreddit_dumper::stream_subreddit_comments(
             &subreddit,
             &mut comment_sender,
@@ -65,6 +74,8 @@ async fn main() {
             &retry_strategy,
         ),
         comment_reader(&mut comment_receiver),
+        */
     );
-    comment_res.unwrap();
+    submission_result.unwrap();
+    //comment_res.unwrap();
 }

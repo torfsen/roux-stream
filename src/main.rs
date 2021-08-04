@@ -54,7 +54,8 @@ async fn main() {
 
     //let (mut comment_sender, mut comment_receiver) = mpsc::unbounded();
 
-    let retry_strategy = ExponentialBackoff::from_millis(100)
+    let retry_strategy = ExponentialBackoff::from_millis(5)
+        .factor(100)
         .map(jitter) // add jitter to delays
         .take(3); // limit to 3 retries
 

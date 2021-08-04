@@ -24,7 +24,7 @@ use roux::{util::RouxError, Subreddit};
 use std::collections::HashSet;
 use std::marker::Unpin;
 use tokio::time::{sleep, Duration};
-use tokio_retry::Retry;
+use tokio_retry::{Retry, RetryIf};
 
 // TODO: Tests
 
@@ -40,6 +40,7 @@ where
     /// An issue with sending the data through the sink
     Sink(S::Error),
 }
+
 
 async fn _pull_submissions_into_sink<S, R, I>(
     subreddit: Subreddit,
@@ -58,9 +59,18 @@ where
 
     loop {
         debug!("Fetching latest submissions from r/{}", subreddit.name);
-        let latest = Retry::spawn(retry_strategy.clone(), || {
-            subreddit.latest(LIMIT, None)
-        }).await;
+        let latest = RetryIf::spawn(
+            retry_strategy.clone(),
+            || { subreddit.latest(LIMIT, None) },
+            |error: &RouxError| {
+                debug!(
+                    "Error while fetching the latest submissions from r/{}: {}",
+                    subreddit.name,
+                    error,
+                );
+                true
+            },
+        ).await;
         match latest {
             Ok(latest_submissions) => {
                 let latest_submissions = latest_submissions

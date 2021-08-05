@@ -1,6 +1,4 @@
-use std::io::Error;
-
-use futures::{channel::mpsc, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use roux::{
     subreddit::responses::{SubmissionsData, SubredditCommentsData},
     util::RouxError,
@@ -28,17 +26,21 @@ where
     Ok(())
 }
 
-async fn comment_reader<S>(stream: &mut S)
+async fn comment_reader<S>(stream: &mut S) -> Result<(), RouxError>
 where
-    S: Stream<Item = SubredditCommentsData> + Unpin,
+    S: Stream<Item = Result<SubredditCommentsData, RouxError>> + Unpin,
 {
     while let Some(comment) = stream.next().await {
-        println!(
-            "New comment in r/{} by {}",
-            comment.subreddit.unwrap(),
-            comment.author.unwrap()
-        );
+        match comment {
+            Ok(comment) => println!(
+                "New comment in r/{} by {}",
+                comment.subreddit.unwrap(),
+                comment.author.unwrap()
+            ),
+            Err(error) => return Err(error),
+        }
     }
+    Ok(())
 }
 
 #[tokio::main]
@@ -61,22 +63,19 @@ async fn main() {
 
     let mut submissions_stream = subreddit_dumper::stream_submissions(
         &subreddit,
+        Duration::from_secs(60),
+        retry_strategy.clone(),
+    );
+    let mut comments_stream = subreddit_dumper::stream_comments(
+        &subreddit,
         Duration::from_secs(10),
-        retry_strategy,
+        retry_strategy.clone(),
     );
 
-    let (submission_result /*comment_res , _*/,) = tokio::join!(
+    let (submission_result, comment_result) = tokio::join!(
         submission_reader(&mut submissions_stream),
-        /*
-        subreddit_dumper::stream_subreddit_comments(
-            &subreddit,
-            &mut comment_sender,
-            Duration::from_secs(15),
-            &retry_strategy,
-        ),
-        comment_reader(&mut comment_receiver),
-        */
+        comment_reader(&mut comments_stream),
     );
     submission_result.unwrap();
-    //comment_res.unwrap();
+    comment_result.unwrap();
 }

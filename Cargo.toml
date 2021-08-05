@@ -1,5 +1,5 @@
 [package]
-name = "subreddit-dumper"
+name = "roux_stream"
 version = "0.1.0"
 authors = ["Florian Brucker <mail@florianbrucker.de>"]
 edition = "2018"

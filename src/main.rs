@@ -8,7 +8,7 @@ use tokio;
 use tokio::time::Duration;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 
-use subreddit_dumper;
+use roux_stream;
 
 async fn submission_reader<S>(stream: &mut S) -> Result<(), RouxError>
 where
@@ -61,12 +61,12 @@ async fn main() {
         .map(jitter) // add jitter to delays
         .take(3); // limit to 3 retries
 
-    let mut submissions_stream = subreddit_dumper::stream_submissions(
+    let mut submissions_stream = roux_stream::stream_submissions(
         &subreddit,
         Duration::from_secs(60),
         retry_strategy.clone(),
     );
-    let mut comments_stream = subreddit_dumper::stream_comments(
+    let mut comments_stream = roux_stream::stream_comments(
         &subreddit,
         Duration::from_secs(10),
         retry_strategy.clone(),

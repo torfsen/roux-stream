@@ -756,6 +756,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "roux_stream"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "log",
+ "roux",
+ "stderrlog",
+ "tokio",
+ "tokio-retry",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -886,18 +898,6 @@ dependencies = [
  "log",
  "termcolor",
  "thread_local",
-]
-
-[[package]]
-name = "subreddit-dumper"
-version = "0.1.0"
-dependencies = [
- "futures",
- "log",
- "roux",
- "stderrlog",
- "tokio",
- "tokio-retry",
 ]
 
 [[package]]

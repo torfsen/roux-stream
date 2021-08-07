@@ -54,8 +54,6 @@ async fn main() {
 
     let subreddit = Subreddit::new("AskReddit");
 
-    //let (mut comment_sender, mut comment_receiver) = mpsc::unbounded();
-
     let retry_strategy = ExponentialBackoff::from_millis(5)
         .factor(100)
         .map(jitter) // add jitter to delays
@@ -66,11 +64,8 @@ async fn main() {
         Duration::from_secs(60),
         retry_strategy.clone(),
     );
-    let mut comments_stream = roux_stream::stream_comments(
-        &subreddit,
-        Duration::from_secs(10),
-        retry_strategy.clone(),
-    );
+    let mut comments_stream =
+        roux_stream::stream_comments(&subreddit, Duration::from_secs(10), retry_strategy.clone());
 
     let (submission_result, comment_result) = tokio::join!(
         submission_reader(&mut submissions_stream),

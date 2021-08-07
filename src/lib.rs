@@ -17,8 +17,9 @@ This module uses the logging infrastructure provided by the [`log`] crate.
 */
 
 use futures::channel::mpsc;
-use futures::{Sink, SinkExt, Stream};
+use futures::{Future, Sink, SinkExt, Stream};
 use log::{debug, warn};
+use roux::responses::{BasicThing, Listing};
 use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
 use roux::{util::RouxError, Subreddit};
 use std::collections::HashSet;
@@ -28,62 +29,79 @@ use tokio_retry::RetryIf;
 
 // TODO: Tests
 
-async fn pull_submissions_into_sink<S, R, I>(
-    subreddit: Subreddit,
+/**
+Pull new items from Reddit and push them into a sink.
+
+This function contains the core of the streaming logic. It
+
+    1. pulls latest items (submissions or comments) from Reddit, retrying that
+       operation if necessary according to `retry_strategy`,
+    2. filters out already seen items using their ID,
+    3. pushes the new items (or an error if pulling failed) into `sink`,
+    4. sleeps for `sleep_time`,
+
+and then repeats that process for ever.
+
+The function can be used to pull either submissions or comments by
+providing suitable `pull` and `get_id` callbacks that account for slight
+differences in the `roux` API for submissions and comments.
+*/
+async fn pull_into_sink<S, R, Pull, PullFut, GetId, Data>(
+    subreddit: &Subreddit,
     sleep_time: Duration,
     retry_strategy: R,
     mut sink: S,
+    item_name: &str,
+    limit: u32,
+    pull: Pull,
+    get_id: GetId,
 ) -> Result<(), S::Error>
 where
-    S: Sink<Result<SubmissionsData, RouxError>> + Unpin,
-    R: IntoIterator<IntoIter = I, Item = Duration> + Clone,
-    I: Iterator<Item = Duration>,
+    S: Sink<Result<Data, RouxError>> + Unpin,
+    R: IntoIterator<Item = Duration> + Clone,
+    Pull: Fn(u32) -> PullFut,
+    PullFut: Future<Output = Result<BasicThing<Listing<BasicThing<Data>>>, RouxError>>,
+    GetId: Fn(&Data) -> String,
 {
-    // How many submissions to fetch per request
-    const LIMIT: u32 = 100;
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        debug!("Fetching latest submissions from r/{}", subreddit.name);
+        debug!("Fetching latest {}s from r/{}", item_name, subreddit.name);
         let latest = RetryIf::spawn(
             retry_strategy.clone(),
-            || subreddit.latest(LIMIT, None),
+            || pull(limit),
             |error: &RouxError| {
                 debug!(
-                    "Error while fetching the latest submissions from r/{}: {}",
-                    subreddit.name, error,
+                    "Error while fetching the latest {}s from r/{}: {}",
+                    item_name, subreddit.name, error,
                 );
                 true
             },
         )
         .await;
         match latest {
-            Ok(latest_submissions) => {
-                let latest_submissions = latest_submissions
-                    .data
-                    .children
-                    .into_iter()
-                    .map(|thing| thing.data);
-
+            Ok(latest_items) => {
+                let latest_items = latest_items.data.children.into_iter().map(|item| item.data);
                 let mut latest_ids: HashSet<String> = HashSet::new();
 
                 let mut num_new = 0;
-                for submission in latest_submissions {
-                    latest_ids.insert(submission.id.clone());
-                    if !seen_ids.contains(&submission.id) {
+                for item in latest_items {
+                    let id = get_id(&item);
+                    latest_ids.insert(id.clone());
+                    if !seen_ids.contains(&id) {
                         num_new += 1;
-                        sink.send(Ok(submission)).await?;
+                        sink.send(Ok(item)).await?;
                     }
                 }
 
                 debug!(
-                    "Got {} new submissions for r/{} (out of {})",
-                    num_new, subreddit.name, LIMIT
+                    "Got {} new {}s for r/{} (out of {})",
+                    num_new, item_name, subreddit.name, limit
                 );
-                if num_new == LIMIT && !seen_ids.is_empty() {
+                if num_new == limit && !seen_ids.is_empty() {
                     warn!(
-                        "All received submissions for r/{} were new, try a shorter sleep_time",
-                        subreddit.name
+                        "All received {}s for r/{} were new, try a shorter sleep_time",
+                        item_name, subreddit.name
                     );
                 }
 
@@ -92,8 +110,8 @@ where
             Err(error) => {
                 // Forward the error through the stream
                 warn!(
-                    "Error while fetching the latest submissions from r/{}: {}",
-                    subreddit.name, error,
+                    "Error while fetching the latest {}s from r/{}: {}",
+                    item_name, subreddit.name, error,
                 );
                 sink.send(Err(error)).await?;
             }
@@ -101,6 +119,29 @@ where
 
         sleep(sleep_time).await;
     }
+}
+
+async fn pull_submissions_into_sink<S, R>(
+    subreddit: Subreddit,
+    sleep_time: Duration,
+    retry_strategy: R,
+    sink: S,
+) -> Result<(), S::Error>
+where
+    S: Sink<Result<SubmissionsData, RouxError>> + Unpin,
+    R: IntoIterator<Item = Duration> + Clone,
+{
+    pull_into_sink(
+        &subreddit,
+        sleep_time,
+        retry_strategy,
+        sink,
+        "submission",
+        100,
+        |limit| subreddit.latest(limit, None),
+        |submission| submission.id.clone(),
+    )
+    .await
 }
 
 /**
@@ -139,80 +180,27 @@ where
     stream
 }
 
-async fn pull_comments_into_sink<S, R, I>(
+async fn pull_comments_into_sink<S, R>(
     subreddit: Subreddit,
     sleep_time: Duration,
     retry_strategy: R,
-    mut sink: S,
+    sink: S,
 ) -> Result<(), S::Error>
 where
     S: Sink<Result<SubredditCommentsData, RouxError>> + Unpin,
-    R: IntoIterator<IntoIter = I, Item = Duration> + Clone,
-    I: Iterator<Item = Duration>,
+    R: IntoIterator<Item = Duration> + Clone,
 {
-    // How many submissions to fetch per request
-    const LIMIT: u32 = 100;
-    let mut seen_ids: HashSet<String> = HashSet::new();
-
-    loop {
-        debug!("Fetching latest comments from r/{}", subreddit.name);
-        let latest = RetryIf::spawn(
-            retry_strategy.clone(),
-            || subreddit.latest_comments(None, Some(LIMIT)),
-            |error: &RouxError| {
-                debug!(
-                    "Error while fetching the latest comments from r/{}: {}",
-                    subreddit.name, error,
-                );
-                true
-            },
-        )
-        .await;
-        match latest {
-            Ok(latest_comments) => {
-                let latest_comments = latest_comments
-                    .data
-                    .children
-                    .into_iter()
-                    .map(|thing| thing.data);
-
-                let mut latest_ids: HashSet<String> = HashSet::new();
-
-                let mut num_new = 0;
-                for comment in latest_comments {
-                    let id = comment.id.as_ref().cloned().unwrap();
-                    latest_ids.insert(id.clone());
-                    if !seen_ids.contains(&id) {
-                        num_new += 1;
-                        sink.send(Ok(comment)).await?;
-                    }
-                }
-
-                debug!(
-                    "Got {} new comments for r/{} (out of {})",
-                    num_new, subreddit.name, LIMIT
-                );
-                if num_new == LIMIT && !seen_ids.is_empty() {
-                    warn!(
-                        "All received comments for r/{} were new, try a shorter sleep_time",
-                        subreddit.name
-                    );
-                }
-
-                seen_ids = latest_ids;
-            }
-            Err(error) => {
-                // Forward the error through the stream
-                warn!(
-                    "Error while fetching the latest comments from r/{}: {}",
-                    subreddit.name, error,
-                );
-                sink.send(Err(error)).await?;
-            }
-        }
-
-        sleep(sleep_time).await;
-    }
+    pull_into_sink(
+        &subreddit,
+        sleep_time,
+        retry_strategy,
+        sink,
+        "comment",
+        100,
+        |limit| subreddit.latest_comments(None, Some(limit)),
+        |comment| comment.id.as_ref().cloned().unwrap(),
+    )
+    .await
 }
 
 /**

@@ -15,13 +15,11 @@ where
     S: Stream<Item = Result<SubmissionsData, RouxError>> + Unpin,
 {
     while let Some(submission) = stream.next().await {
-        match submission {
-            Ok(submission) => println!(
-                "New submission in r/{} by {}",
-                submission.subreddit, submission.author
-            ),
-            Err(error) => return Err(error),
-        }
+        let submission = submission?;
+        println!(
+            "New submission in r/{} by {}",
+            submission.subreddit, submission.author
+        )
     }
     Ok(())
 }
@@ -31,14 +29,11 @@ where
     S: Stream<Item = Result<SubredditCommentsData, RouxError>> + Unpin,
 {
     while let Some(comment) = stream.next().await {
-        match comment {
-            Ok(comment) => println!(
-                "New comment in r/{} by {}",
-                comment.subreddit.unwrap(),
-                comment.author.unwrap()
-            ),
-            Err(error) => return Err(error),
-        }
+        let comment = comment?;
+        println!(
+            "New comment in r/{} by {}",
+            comment.subreddit.unwrap(), comment.author.unwrap()
+        )
     }
     Ok(())
 }

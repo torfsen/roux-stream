@@ -16,8 +16,9 @@ details.
 This module uses the logging infrastructure provided by the [`log`] crate.
 */
 
+use async_trait::async_trait;
 use futures::channel::mpsc;
-use futures::{Future, Sink, SinkExt, Stream};
+use futures::{Sink, SinkExt, Stream};
 use log::{debug, warn};
 use roux::responses::{BasicThing, Listing};
 use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
@@ -28,6 +29,67 @@ use tokio::time::{sleep, Duration};
 use tokio_retry::RetryIf;
 
 // TODO: Tests
+
+// The `roux` APIs for submissions and comments are slightly different. We use
+// the `Puller` trait as the common interface to which we then adapt those APIs.
+// This allows us to implement our core logic (e.g. retries and duplicate
+// filtering) once without caring about the differences between submissions and
+// comments. In addition, this makes it easier to test the core logic because
+// we can provide a mock implementation.
+#[async_trait]
+trait Puller<Data> {
+    async fn pull(&self) -> Result<BasicThing<Listing<BasicThing<Data>>>, RouxError>;
+    fn get_id(&self, data: &Data) -> String;
+    fn get_items_name(&self) -> String;
+    fn get_source_name(&self) -> String;
+}
+
+struct SubredditPuller {
+    subreddit: Subreddit,
+}
+
+// How many items to fetch per request
+const LIMIT: u32 = 100;
+
+#[async_trait]
+impl Puller<SubmissionsData> for SubredditPuller {
+    async fn pull(&self) -> Result<BasicThing<Listing<BasicThing<SubmissionsData>>>, RouxError> {
+        self.subreddit.latest(LIMIT, None).await
+    }
+
+    fn get_id(&self, data: &SubmissionsData) -> String {
+        data.id.clone()
+    }
+
+    fn get_items_name(&self) -> String {
+        "submissions".to_owned()
+    }
+
+    fn get_source_name(&self) -> String {
+        format!("r/{}", self.subreddit.name)
+    }
+}
+
+#[async_trait]
+impl Puller<SubredditCommentsData> for SubredditPuller {
+    async fn pull(
+        &self,
+    ) -> Result<BasicThing<Listing<BasicThing<SubredditCommentsData>>>, RouxError> {
+        self.subreddit.latest_comments(None, Some(LIMIT)).await
+    }
+
+    fn get_id(&self, data: &SubredditCommentsData) -> String {
+        data.id.as_ref().cloned().unwrap()
+    }
+
+    fn get_items_name(&self) -> String {
+        "comments".to_owned()
+    }
+
+    fn get_source_name(&self) -> String {
+        format!("r/{}", self.subreddit.name)
+    }
+}
 
 /**
 Pull new items from Reddit and push them into a sink.
@@ -41,39 +103,30 @@ This function contains the core of the streaming logic. It
     4. sleeps for `sleep_time`,
 
 and then repeats that process for ever.
-
-The function can be used to pull either submissions or comments by
-providing suitable `pull` and `get_id` callbacks that account for slight
-differences in the `roux` API for submissions and comments.
 */
-async fn pull_into_sink<S, R, Pull, PullFut, GetId, Data>(
-    subreddit: &Subreddit,
+async fn pull_into_sink<S, R, Data>(
+    puller: &(dyn Puller<Data> + Send + Sync),
     sleep_time: Duration,
     retry_strategy: R,
     mut sink: S,
-    item_name: &str,
-    limit: u32,
-    pull: Pull,
-    get_id: GetId,
 ) -> Result<(), S::Error>
 where
     S: Sink<Result<Data, RouxError>> + Unpin,
     R: IntoIterator<Item = Duration> + Clone,
-    Pull: Fn(u32) -> PullFut,
-    PullFut: Future<Output = Result<BasicThing<Listing<BasicThing<Data>>>, RouxError>>,
-    GetId: Fn(&Data) -> String,
 {
+    let items_name = puller.get_items_name();
+    let source_name = puller.get_source_name();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     loop {
-        debug!("Fetching latest {}s from r/{}", item_name, subreddit.name);
+        debug!("Fetching latest {} from {}", items_name, source_name);
         let latest = RetryIf::spawn(
             retry_strategy.clone(),
-            || pull(limit),
+            || puller.pull(),
             |error: &RouxError| {
                 debug!(
-                    "Error while fetching the latest {}s from r/{}: {}",
-                    item_name, subreddit.name, error,
+                    "Error while fetching the latest {} from {}: {}",
+                    items_name, source_name, error,
                 );
                 true
             },
@@ -86,7 +139,7 @@ where
 
                 let mut num_new = 0;
                 for item in latest_items {
-                    let id = get_id(&item);
+                    let id = puller.get_id(&item);
                     latest_ids.insert(id.clone());
                     if !seen_ids.contains(&id) {
                         num_new += 1;
@@ -95,13 +148,13 @@ where
                 }
 
                 debug!(
-                    "Got {} new {}s for r/{} (out of {})",
-                    num_new, item_name, subreddit.name, limit
+                    "Got {} new {} for {} (out of {})",
+                    num_new, items_name, source_name, LIMIT
                 );
-                if num_new == limit && !seen_ids.is_empty() {
+                if num_new == LIMIT && !seen_ids.is_empty() {
                     warn!(
-                        "All received {}s for r/{} were new, try a shorter sleep_time",
-                        item_name, subreddit.name
+                        "All received {} for {} were new, try a shorter sleep_time",
+                        items_name, source_name
                     );
                 }
 
@@ -110,8 +163,8 @@ where
             Err(error) => {
                 // Forward the error through the stream
                 warn!(
-                    "Error while fetching the latest {}s from r/{}: {}",
-                    item_name, subreddit.name, error,
+                    "Error while fetching the latest {} from {}: {}",
+                    items_name, source_name, error,
                 );
                 sink.send(Err(error)).await?;
             }
@@ -132,14 +185,10 @@ where
     R: IntoIterator<Item = Duration> + Clone,
 {
     pull_into_sink(
-        &subreddit,
+        &SubredditPuller { subreddit },
         sleep_time,
         retry_strategy,
         sink,
-        "submission",
-        100,
-        |limit| subreddit.latest(limit, None),
-        |submission| submission.id.clone(),
     )
     .await
 }
@@ -191,14 +240,10 @@ where
     R: IntoIterator<Item = Duration> + Clone,
 {
     pull_into_sink(
-        &subreddit,
+        &SubredditPuller { subreddit },
         sleep_time,
         retry_strategy,
         sink,
-        "comment",
-        100,
-        |limit| subreddit.latest_comments(None, Some(limit)),
-        |comment| comment.id.as_ref().cloned().unwrap(),
     )
     .await
 }

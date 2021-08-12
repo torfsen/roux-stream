@@ -32,7 +32,8 @@ where
         let comment = comment?;
         println!(
             "New comment in r/{} by {}",
-            comment.subreddit.unwrap(), comment.author.unwrap()
+            comment.subreddit.unwrap(),
+            comment.author.unwrap()
         )
     }
     Ok(())

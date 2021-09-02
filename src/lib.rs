@@ -30,12 +30,14 @@ use tokio_retry::RetryIf;
 
 // TODO: Tests
 
-// The `roux` APIs for submissions and comments are slightly different. We use
-// the `Puller` trait as the common interface to which we then adapt those APIs.
-// This allows us to implement our core logic (e.g. retries and duplicate
-// filtering) once without caring about the differences between submissions and
-// comments. In addition, this makes it easier to test the core logic because
-// we can provide a mock implementation.
+/**
+The [`roux`] APIs for submissions and comments are slightly different. We use
+the [`Puller`] trait as the common interface to which we then adapt those APIs.
+This allows us to implement our core logic (e.g. retries and duplicate
+filtering) once without caring about the differences between submissions and
+comments. In addition, this makes it easier to test the core logic because
+we can provide a mock implementation.
+*/
 #[async_trait]
 trait Puller<Data> {
     async fn pull(&self) -> Result<BasicThing<Listing<BasicThing<Data>>>, RouxError>;
@@ -96,11 +98,11 @@ Pull new items from Reddit and push them into a sink.
 
 This function contains the core of the streaming logic. It
 
-    1. pulls latest items (submissions or comments) from Reddit, retrying that
-       operation if necessary according to `retry_strategy`,
-    2. filters out already seen items using their ID,
-    3. pushes the new items (or an error if pulling failed) into `sink`,
-    4. sleeps for `sleep_time`,
+1. pulls latest items (submissions or comments) from Reddit, retrying that
+   operation if necessary according to `retry_strategy`,
+2. filters out already seen items using their ID,
+3. pushes the new items (or an error if pulling failed) into `sink`,
+4. sleeps for `sleep_time`,
 
 and then repeats that process for ever.
 */

@@ -176,25 +176,6 @@ where
     }
 }
 
-async fn pull_submissions_into_sink<S, R>(
-    subreddit: Subreddit,
-    sleep_time: Duration,
-    retry_strategy: R,
-    sink: S,
-) -> Result<(), S::Error>
-where
-    S: Sink<Result<SubmissionsData, RouxError>> + Unpin,
-    R: IntoIterator<Item = Duration> + Clone,
-{
-    pull_into_sink(
-        &SubredditPuller { subreddit },
-        sleep_time,
-        retry_strategy,
-        sink,
-    )
-    .await
-}
-
 /**
 Stream new submissions in a subreddit
 
@@ -219,35 +200,20 @@ where
     I: Iterator<Item = Duration> + Send + Sync + 'static,
 {
     let (sink, stream) = mpsc::unbounded();
-    tokio::spawn(pull_submissions_into_sink(
-        // We need an owned instance (or at least statically bound
-        // reference) for tokio::spawn. Since Subreddit isn't Copy
-        // or Clone, we simply create a new instance.
-        Subreddit::new(subreddit.name.as_str()),
-        sleep_time,
-        retry_strategy,
-        sink,
-    ));
+    // We need an owned instance (or at least statically bound
+    // reference) for tokio::spawn. Since Subreddit isn't Clone,
+    // we simply create a new instance.
+    let subreddit = Subreddit::new(subreddit.name.as_str());
+    tokio::spawn(async move {
+        pull_into_sink(
+            &SubredditPuller { subreddit },
+            sleep_time,
+            retry_strategy,
+            sink,
+        )
+        .await
+    });
     stream
-}
-
-async fn pull_comments_into_sink<S, R>(
-    subreddit: Subreddit,
-    sleep_time: Duration,
-    retry_strategy: R,
-    sink: S,
-) -> Result<(), S::Error>
-where
-    S: Sink<Result<SubredditCommentsData, RouxError>> + Unpin,
-    R: IntoIterator<Item = Duration> + Clone,
-{
-    pull_into_sink(
-        &SubredditPuller { subreddit },
-        sleep_time,
-        retry_strategy,
-        sink,
-    )
-    .await
 }
 
 /**
@@ -274,14 +240,18 @@ where
     I: Iterator<Item = Duration> + Send + Sync + 'static,
 {
     let (sink, stream) = mpsc::unbounded();
-    tokio::spawn(pull_comments_into_sink(
-        // We need an owned instance (or at least statically bound
-        // reference) for tokio::spawn. Since Subreddit isn't Copy
-        // or Clone, we simply create a new instance.
-        Subreddit::new(subreddit.name.as_str()),
-        sleep_time,
-        retry_strategy,
-        sink,
-    ));
+    // We need an owned instance (or at least statically bound
+    // reference) for tokio::spawn. Since Subreddit isn't Clone,
+    // we simply create a new instance.
+    let subreddit = Subreddit::new(subreddit.name.as_str());
+    tokio::spawn(async move {
+        pull_into_sink(
+            &SubredditPuller { subreddit },
+            sleep_time,
+            retry_strategy,
+            sink,
+        )
+        .await
+    });
     stream
 }

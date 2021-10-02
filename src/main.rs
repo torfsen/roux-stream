@@ -4,11 +4,8 @@ use roux::{
     util::RouxError,
     Subreddit,
 };
-use tokio;
 use tokio::time::Duration;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
-
-use roux_stream;
 
 async fn submission_reader<S>(stream: &mut S) -> Result<(), RouxError>
 where

@@ -131,7 +131,7 @@ where
 
     /*
     Because `puller.pull` takes a mutable reference we need wrap it in
-    a mutex to be able to pass it as a callback to `RetrIf::spawn`.
+    a mutex to be able to pass it as a callback to `RetryIf::spawn`.
      */
     let puller_mutex = Mutex::new(puller);
 

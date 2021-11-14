@@ -52,12 +52,12 @@ async fn main() {
         .map(jitter) // add jitter to delays
         .take(3); // limit to 3 retries
 
-    let mut submissions_stream = roux_stream::stream_submissions(
+    let (mut submissions_stream, submissions_handle) = roux_stream::stream_submissions(
         &subreddit,
         Duration::from_secs(60),
         retry_strategy.clone(),
     );
-    let mut comments_stream =
+    let (mut comments_stream, comments_handle) =
         roux_stream::stream_comments(&subreddit, Duration::from_secs(10), retry_strategy.clone());
 
     let (submission_result, comment_result) = tokio::join!(
@@ -66,4 +66,6 @@ async fn main() {
     );
     submission_result.unwrap();
     comment_result.unwrap();
+    submissions_handle.await.unwrap().unwrap();
+    comments_handle.await.unwrap().unwrap();
 }

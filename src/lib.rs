@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
 
 /*!
-Streaming API for [`roux`]
+A streaming API for the [`roux`] Reddit client.
 
 Reddit's API does not provide "firehose"-style streaming of new posts and
 comments. Instead, the endpoints for retrieving the latest posts and comments
@@ -23,6 +23,7 @@ use log::{debug, warn};
 use roux::responses::{BasicThing, Listing};
 use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
 use roux::{util::RouxError, Subreddit};
+use tokio::task::JoinHandle;
 use std::collections::HashSet;
 use std::error::Error;
 use std::marker::Unpin;
@@ -192,24 +193,92 @@ where
 }
 
 /**
-Stream new submissions in a subreddit
+Stream new submissions in a subreddit.
 
-The subreddit is polled regularly for new submissions, and each previously
-unseen submission is sent into the returned stream.
+Creates a separate tokio task that regularly polls the subreddit for new
+submissions. Previously unseen submissions are sent into the returned
+stream.
 
-`sleep_time` controls the interval between calls to the Reddit API, and depends
-on how much traffic the subreddit has. Each call fetches the 100 latest items
-(the maximum number allowed by Reddit). A warning is logged if none of those
-items has been seen in the previous call: this indicates a potential miss of new
-content and suggests that a smaller `sleep_time` should be chosen.
+`sleep_time` controls the interval between calls to the Reddit API, and
+depends on how much traffic the subreddit has. Each call fetches the 100
+latest items (the maximum number allowed by Reddit). A warning is logged
+if none of those items has been seen in the previous call: this indicates
+a potential miss of new content and suggests that a smaller `sleep_time`
+should be chosen. Enable debug logging for more statistics.
 
 For details on `retry_strategy` see [`tokio_retry`].
+
+Returns a tuple `(stream, join_handle)` where `stream` is the
+[`Stream`](futures::Stream) from which the submissions can be read, and
+`join_handle` is the [`JoinHandle`](tokio::task::JoinHandle) for the
+polling task.
+
+See also [`stream_comments`].
+
+
+# Example
+
+The following example prints new submissions to
+[r/AskReddit](https://reddit.com/r/AskReddit) in an endless loop.
+
+```
+use std::time::Duration;
+
+use futures::StreamExt;
+use roux::Subreddit;
+use roux_stream::stream_submissions;
+use tokio_retry::strategy::ExponentialBackoff;
+
+
+#[tokio::main]
+async fn main() {
+    let subreddit = Subreddit::new("AskReddit");
+
+    // How often to retry when pulling the data from Reddit fails and
+    // how long to wait between retries. See the docs of `tokio_retry`
+    // for details.
+    let retry_strategy = ExponentialBackoff::from_millis(5).factor(100).take(3);
+    
+    let (mut stream, join_handle) = stream_submissions(
+        &subreddit,
+        Duration::from_secs(60),
+        retry_strategy,
+    );
+
+    while let Some(submission) = stream.next().await {
+        // `submission` is an `Err` if getting the latest submissions
+        // from Reddit failed even after retrying.
+        let submission = submission.unwrap();
+        println!("\"{}\" by {}", submission.title, submission.author);
+        # // An endless loop doesn't work well with doctests, so in that
+        # // case we abort the task and exit the loop directly.
+        # join_handle.abort();
+        # break;
+    }
+    # // Aborting the task will make the join handle return an error. Let's
+    # // make sure it's the right one.
+    # let join_result = join_handle.await;
+    # assert!(join_result.is_err());
+    # assert!(join_result.err().unwrap().is_cancelled());
+    # // Now we need to make sure that the remaining code in the example
+    # // still works, so we create a fake `join_handle` for it to work
+    # // with.
+    # let join_handle = async { Some(Some(())) };
+
+    // In case there was an error sending the submissions through the
+    // stream, `join_handle` will report it.
+    join_handle.await.unwrap().unwrap();
+}
+```
 */
 pub fn stream_submissions<R, I>(
     subreddit: &Subreddit,
     sleep_time: Duration,
     retry_strategy: R,
-) -> impl Stream<Item = Result<SubmissionsData, RouxError>>
+) -> (
+    impl Stream<Item = Result<SubmissionsData, RouxError>>,
+    JoinHandle<Result<(), mpsc::SendError>>,
+)
 where
     R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
     I: Iterator<Item = Duration> + Send + Sync + 'static,
@@ -219,7 +288,7 @@ where
     // reference) for tokio::spawn. Since Subreddit isn't Clone,
     // we simply create a new instance.
     let subreddit = Subreddit::new(subreddit.name.as_str());
-    tokio::spawn(async move {
+    let join_handle = tokio::spawn(async move {
         pull_into_sink(
             &mut SubredditPuller { subreddit },
             sleep_time,
@@ -228,28 +297,101 @@ where
         )
         .await
     });
-    stream
+    (stream, join_handle)
 }
 
 /**
-Stream new comments in a subreddit
+Stream new comments in a subreddit.
 
-The subreddit is polled regularly for new comments, and each previously
-unseen comment is sent into the returned stream.
+Creates a separate tokio task that regularly polls the subreddit for new
+comments. Previously unseen comments are sent into the returned
+stream.
 
-`sleep_time` controls the interval between calls to the Reddit API, and depends
-on how much traffic the subreddit has. Each call fetches the 100 latest items
-(the maximum number allowed by Reddit). A warning is logged if none of those
-items has been seen in the previous call: this indicates a potential miss of new
-content and suggests that a smaller `sleep_time` should be chosen.
+`sleep_time` controls the interval between calls to the Reddit API, and
+depends on how much traffic the subreddit has. Each call fetches the 100
+latest items (the maximum number allowed by Reddit). A warning is logged
+if none of those items has been seen in the previous call: this indicates
+a potential miss of new content and suggests that a smaller `sleep_time`
+should be chosen. Enable debug logging for more statistics.
 
 For details on `retry_strategy` see [`tokio_retry`].
+
+Returns a tuple `(stream, join_handle)` where `stream` is the
+[`Stream`](futures::Stream) from which the comments can be read, and
+`join_handle` is the [`JoinHandle`](tokio::task::JoinHandle) for the
+polling task.
+
+See also [`stream_submissions`].
+
+
+# Example
+
+The following example prints new comments to
+[r/AskReddit](https://reddit.com/r/AskReddit) in an endless loop.
+
+```
+use std::time::Duration;
+
+use futures::StreamExt;
+use roux::Subreddit;
+use roux_stream::stream_comments;
+use tokio_retry::strategy::ExponentialBackoff;
+
+
+#[tokio::main]
+async fn main() {
+    let subreddit = Subreddit::new("AskReddit");
+
+    // How often to retry when pulling the data from Reddit fails and
+    // how long to wait between retries. See the docs of `tokio_retry`
+    // for details.
+    let retry_strategy = ExponentialBackoff::from_millis(5).factor(100).take(3);
+    
+    let (mut stream, join_handle) = stream_comments(
+        &subreddit,
+        Duration::from_secs(10),
+        retry_strategy,
+    );
+
+    while let Some(comment) = stream.next().await {
+        // `comment` is an `Err` if getting the latest comments
+        // from Reddit failed even after retrying.
+        let comment = comment.unwrap();
+        println!(
+            "{}{} (by u/{})",
+            comment.link_url.unwrap(),
+            comment.id.unwrap(),
+            comment.author.unwrap()
+        );
+        # // An endless loop doesn't work well with doctests, so in that
+        # // case we abort the task and exit the loop directly.
+        # join_handle.abort();
+        # break;
+    }
+    # // Aborting the task will make the join handle return an error. Let's
+    # // make sure it's the right one.
+    # let join_result = join_handle.await;
+    # assert!(join_result.is_err());
+    # assert!(join_result.err().unwrap().is_cancelled());
+    # // Now we need to make sure that the remaining code in the example
+    # // still works, so we create a fake `join_handle` for it to work
+    # // with.
+    # let join_handle = async { Some(Some(())) };
+
+    // In case there was an error sending the submissions through the
+    // stream, `join_handle` will report it.
+    join_handle.await.unwrap().unwrap();
+}
+```
 */
 pub fn stream_comments<R, I>(
     subreddit: &Subreddit,
     sleep_time: Duration,
     retry_strategy: R,
-) -> impl Stream<Item = Result<SubredditCommentsData, RouxError>>
+) -> (
+    impl Stream<Item = Result<SubredditCommentsData, RouxError>>,
+    JoinHandle<Result<(), mpsc::SendError>>,
+)
 where
     R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
     I: Iterator<Item = Duration> + Send + Sync + 'static,
@@ -259,7 +401,7 @@ where
     // reference) for tokio::spawn. Since Subreddit isn't Clone,
     // we simply create a new instance.
     let subreddit = Subreddit::new(subreddit.name.as_str());
-    tokio::spawn(async move {
+    let join_handle = tokio::spawn(async move {
         pull_into_sink(
             &mut SubredditPuller { subreddit },
             sleep_time,
@@ -268,7 +410,7 @@ where
         )
         .await
     });
-    stream
+    (stream, join_handle)
 }
 
 #[cfg(test)]

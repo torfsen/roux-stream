@@ -23,11 +23,11 @@ use log::{debug, warn};
 use roux::responses::{BasicThing, Listing};
 use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
 use roux::{util::RouxError, Subreddit};
-use tokio::task::JoinHandle;
 use std::collections::HashSet;
 use std::error::Error;
 use std::marker::Unpin;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use tokio_retry::RetryIf;
 
@@ -238,7 +238,7 @@ async fn main() {
     // how long to wait between retries. See the docs of `tokio_retry`
     // for details.
     let retry_strategy = ExponentialBackoff::from_millis(5).factor(100).take(3);
-    
+
     let (mut stream, join_handle) = stream_submissions(
         &subreddit,
         Duration::from_secs(60),
@@ -346,7 +346,7 @@ async fn main() {
     // how long to wait between retries. See the docs of `tokio_retry`
     // for details.
     let retry_strategy = ExponentialBackoff::from_millis(5).factor(100).take(3);
-    
+
     let (mut stream, join_handle) = stream_comments(
         &subreddit,
         Duration::from_secs(10),

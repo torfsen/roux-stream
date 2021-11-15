@@ -1,3 +1,8 @@
+/*
+This example illustrates how to listen for both new submissions and new
+comments at the same time.
+ */
+
 use futures::{Stream, StreamExt};
 use roux::{
     subreddit::responses::{SubmissionsData, SubredditCommentsData},

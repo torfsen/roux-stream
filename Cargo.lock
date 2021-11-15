@@ -790,7 +790,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "roux_stream"
+name = "roux-stream"
 version = "0.1.0"
 dependencies = [
  "async-trait",

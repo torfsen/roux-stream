@@ -215,6 +215,42 @@ where
 }
 
 /**
+Spawn a task that pulls items and puts them into a stream.
+
+Depending on `T`, this function will either stream submissions or comments.
+*/
+fn stream_items<R, I, T>(
+    subreddit: &Subreddit,
+    sleep_time: Duration,
+    retry_strategy: R,
+) -> (
+    impl Stream<Item = Result<T, RouxError>>,
+    JoinHandle<Result<(), mpsc::SendError>>,
+)
+where
+    R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
+    I: Iterator<Item = Duration> + Send + Sync + 'static,
+    SubredditPuller: Puller<T, RouxError>,
+    T: Send + 'static,
+{
+    let (sink, stream) = mpsc::unbounded();
+    // We need an owned instance (or at least statically bound
+    // reference) for tokio::spawn. Since Subreddit isn't Clone,
+    // we simply create a new instance.
+    let subreddit = Subreddit::new(subreddit.name.as_str());
+    let join_handle = tokio::spawn(async move {
+        pull_into_sink(
+            &mut SubredditPuller { subreddit },
+            sleep_time,
+            retry_strategy,
+            sink,
+        )
+        .await
+    });
+    (stream, join_handle)
+}
+
+/**
 Stream new submissions in a subreddit.
 
 Creates a separate tokio task that regularly polls the subreddit for new
@@ -313,21 +349,7 @@ where
     R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
     I: Iterator<Item = Duration> + Send + Sync + 'static,
 {
-    let (sink, stream) = mpsc::unbounded();
-    // We need an owned instance (or at least statically bound
-    // reference) for tokio::spawn. Since Subreddit isn't Clone,
-    // we simply create a new instance.
-    let subreddit = Subreddit::new(subreddit.name.as_str());
-    let join_handle = tokio::spawn(async move {
-        pull_into_sink(
-            &mut SubredditPuller { subreddit },
-            sleep_time,
-            retry_strategy,
-            sink,
-        )
-        .await
-    });
-    (stream, join_handle)
+    stream_items(subreddit, sleep_time, retry_strategy)
 }
 
 /**
@@ -434,21 +456,7 @@ where
     R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
     I: Iterator<Item = Duration> + Send + Sync + 'static,
 {
-    let (sink, stream) = mpsc::unbounded();
-    // We need an owned instance (or at least statically bound
-    // reference) for tokio::spawn. Since Subreddit isn't Clone,
-    // we simply create a new instance.
-    let subreddit = Subreddit::new(subreddit.name.as_str());
-    let join_handle = tokio::spawn(async move {
-        pull_into_sink(
-            &mut SubredditPuller { subreddit },
-            sleep_time,
-            retry_strategy,
-            sink,
-        )
-        .await
-    });
-    (stream, join_handle)
+    stream_items(subreddit, sleep_time, retry_strategy)
 }
 
 #[cfg(test)]

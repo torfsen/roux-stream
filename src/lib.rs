@@ -221,6 +221,11 @@ Creates a separate tokio task that regularly polls the subreddit for new
 submissions. Previously unseen submissions are sent into the returned
 stream.
 
+Returns a tuple `(stream, join_handle)` where `stream` is the
+[`Stream`](futures::Stream) from which the submissions can be read, and
+`join_handle` is the [`JoinHandle`](tokio::task::JoinHandle) for the
+polling task.
+
 `sleep_time` controls the interval between calls to the Reddit API, and
 depends on how much traffic the subreddit has. Each call fetches the 100
 latest items (the maximum number allowed by Reddit). A warning is logged
@@ -228,12 +233,15 @@ if none of those items has been seen in the previous call: this indicates
 a potential miss of new content and suggests that a smaller `sleep_time`
 should be chosen. Enable debug logging for more statistics.
 
-For details on `retry_strategy` see [`tokio_retry`].
+If an error occurs while fetching the latest submissions from Reddit then
+fetching is retried according to `retry_strategy` (see [`tokio_retry`] for
+details). If one of the retries succeeds then normal operation is resumed.
+If `retry_strategy` is finite and the last retry fails then its error is
+sent into the stream, afterwards normal operation is resumed.
 
-Returns a tuple `(stream, join_handle)` where `stream` is the
-[`Stream`](futures::Stream) from which the submissions can be read, and
-`join_handle` is the [`JoinHandle`](tokio::task::JoinHandle) for the
-polling task.
+The spawned task runs indefinitely unless an error is encountered when
+sending data into the stream (for example because the receiver is dropped).
+In that case the task stops and the error is returned via `join_handle`.
 
 See also [`stream_comments`].
 
@@ -329,6 +337,11 @@ Creates a separate tokio task that regularly polls the subreddit for new
 comments. Previously unseen comments are sent into the returned
 stream.
 
+Returns a tuple `(stream, join_handle)` where `stream` is the
+[`Stream`](futures::Stream) from which the comments can be read, and
+`join_handle` is the [`JoinHandle`](tokio::task::JoinHandle) for the
+polling task.
+
 `sleep_time` controls the interval between calls to the Reddit API, and
 depends on how much traffic the subreddit has. Each call fetches the 100
 latest items (the maximum number allowed by Reddit). A warning is logged
@@ -336,12 +349,15 @@ if none of those items has been seen in the previous call: this indicates
 a potential miss of new content and suggests that a smaller `sleep_time`
 should be chosen. Enable debug logging for more statistics.
 
-For details on `retry_strategy` see [`tokio_retry`].
+If an error occurs while fetching the latest comments from Reddit then
+fetching is retried according to `retry_strategy` (see [`tokio_retry`] for
+details). If one of the retries succeeds then normal operation is resumed.
+If `retry_strategy` is finite and the last retry fails then its error is
+sent into the stream, afterwards normal operation is resumed.
 
-Returns a tuple `(stream, join_handle)` where `stream` is the
-[`Stream`](futures::Stream) from which the comments can be read, and
-`join_handle` is the [`JoinHandle`](tokio::task::JoinHandle) for the
-polling task.
+The spawned task runs indefinitely unless an error is encountered when
+sending data into the stream (for example because the receiver is dropped).
+In that case the task stops and the error is returned via `join_handle`.
 
 See also [`stream_submissions`].
 

@@ -3,6 +3,13 @@ name = "roux-stream"
 version = "0.1.0"
 authors = ["Florian Brucker <mail@florianbrucker.de>"]
 edition = "2021"
+license = "MIT"
+description = "A streaming API for the roux Reddit client"
+readme = "README.md"
+homepage = "https://github.com/torfsen/roux-stream"
+repository = "https://github.com/torfsen/roux-stream"
+keywords = ["reddit", "roux", "stream", "api"]
+categories = ["api-bindings", "asynchronous"]
 
 [dependencies]
 async-trait = "0.1.51"

@@ -14,6 +14,11 @@ for a subreddit's posts (submissions) and comments.
 Distributed under the MIT license. See the file `LICENSE` for details.
 
 
+## Changelog
+
+See the file `CHANGELOG.md`.
+
+
 # Development
 
 Clone the repository:

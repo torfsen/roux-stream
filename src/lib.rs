@@ -40,17 +40,23 @@ This module uses the logging infrastructure provided by the [`log`] crate.
 
 use async_trait::async_trait;
 use futures::channel::mpsc;
-use futures::{Sink, SinkExt, Stream};
+use futures::Stream;
+use futures::{Sink, SinkExt};
 use log::{debug, warn};
 use roux::responses::{BasicThing, Listing};
-use roux::subreddit::responses::{comments::SubredditCommentsData, SubmissionsData};
-use roux::{util::RouxError, Subreddit};
-use std::collections::HashSet;
+use roux::{
+    subreddit::responses::{SubmissionsData, SubredditCommentsData},
+    util::RouxError,
+    Subreddit,
+};
 use std::error::Error;
+use std::fmt::Display;
 use std::marker::Unpin;
+use std::{collections::HashSet, time::Duration};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
+use tokio::time::error::Elapsed;
+use tokio::time::sleep;
 use tokio_retry::RetryIf;
 
 /**
@@ -124,26 +130,58 @@ impl Puller<SubredditCommentsData, RouxError> for SubredditPuller {
 }
 
 /**
+Error that occurs when pulling new data from Reddit failed.
+ */
+#[derive(Debug, PartialEq)]
+pub enum StreamError<E> {
+    /**
+    Returned when pulling new data timed out.
+     */
+    TimeoutError(Elapsed),
+
+    /**
+    Returned when [`roux`] reported an error while pulling new data.
+    */
+    SourceError(E),
+}
+
+impl<E> Display for StreamError<E>
+where
+    E: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamError::TimeoutError(err) => err.fmt(f),
+            StreamError::SourceError(err) => err.fmt(f),
+        }
+    }
+}
+
+impl<E> Error for StreamError<E> where E: std::fmt::Debug + Display {}
+
+/**
 Pull new items from Reddit and push them into a sink.
 
-This function contains the core of the streaming logic. It
+This function contains the core of the streaming logic. It performs the
+following steps in an endless loop:
 
-1. pulls latest items (submissions or comments) from Reddit, retrying that
-   operation if necessary according to `retry_strategy`,
-2. filters out already seen items using their ID,
-3. pushes the new items (or an error if pulling failed) into `sink`,
-4. sleeps for `sleep_time`,
-
-and then repeats that process for ever.
+1. Pull the latest items (submissions or comments) from Reddit, retrying
+   that operation if necessary according to `retry_strategy`. If
+   `timeout` is given and pulling the items from Reddit takes longer
+   then abort and yield an error (see step 3).
+2. Filter out already seen items using their ID.
+3. Push the new items (or an error if pulling failed) into `sink`.
+4. Sleep for `sleep_time`.
 */
 async fn pull_into_sink<S, R, Data, E>(
     puller: &mut (dyn Puller<Data, E> + Send + Sync),
     sleep_time: Duration,
     retry_strategy: R,
+    timeout: Option<Duration>,
     mut sink: S,
 ) -> Result<(), S::Error>
 where
-    S: Sink<Result<Data, E>> + Unpin,
+    S: Sink<Result<Data, StreamError<E>>> + Unpin,
     R: IntoIterator<Item = Duration> + Clone,
     E: Error,
 {
@@ -161,8 +199,31 @@ where
         debug!("Fetching latest {} from {}", items_name, source_name);
         let latest = RetryIf::spawn(
             retry_strategy.clone(),
-            || async { puller_mutex.lock().await.pull().await },
-            |error: &E| {
+            || async {
+                let mut puller = puller_mutex.lock().await;
+
+                // TODO: There is probably a nicer way to write those matches
+
+                if let Some(timeout_duration) = timeout {
+                    let timeout_result =
+                        tokio::time::timeout(timeout_duration, puller.pull()).await;
+                    match timeout_result {
+                        Err(timeout_err) => Err::<BasicThing<Listing<BasicThing<Data>>>, _>(
+                            StreamError::TimeoutError(timeout_err),
+                        ),
+                        Ok(timeout_ok) => match timeout_ok {
+                            Err(puller_err) => Err(StreamError::SourceError(puller_err)),
+                            Ok(pull_ok) => Ok(pull_ok),
+                        },
+                    }
+                } else {
+                    match puller.pull().await {
+                        Err(puller_err) => Err(StreamError::SourceError(puller_err)),
+                        Ok(pull_ok) => Ok(pull_ok),
+                    }
+                }
+            },
+            |error: &StreamError<E>| {
                 debug!(
                     "Error while fetching the latest {} from {}: {}",
                     items_name, source_name, error,
@@ -223,8 +284,9 @@ fn stream_items<R, I, T>(
     subreddit: &Subreddit,
     sleep_time: Duration,
     retry_strategy: R,
+    timeout: Option<Duration>,
 ) -> (
-    impl Stream<Item = Result<T, RouxError>>,
+    impl Stream<Item = Result<T, StreamError<RouxError>>>,
     JoinHandle<Result<(), mpsc::SendError>>,
 )
 where
@@ -243,6 +305,7 @@ where
             &mut SubredditPuller { subreddit },
             sleep_time,
             retry_strategy,
+            timeout,
             sink,
         )
         .await
@@ -269,6 +332,9 @@ if none of those items has been seen in the previous call: this indicates
 a potential miss of new content and suggests that a smaller `sleep_time`
 should be chosen. Enable debug logging for more statistics.
 
+If `timeout` is not `None` then calls to the Reddit API that take longer
+than `timeout` are aborted with a [`StreamError::TimeoutError`].
+
 If an error occurs while fetching the latest submissions from Reddit then
 fetching is retried according to `retry_strategy` (see [`tokio_retry`] for
 details). If one of the retries succeeds then normal operation is resumed.
@@ -288,13 +354,11 @@ The following example prints new submissions to
 [r/AskReddit](https://reddit.com/r/AskReddit) in an endless loop.
 
 ```
-use std::time::Duration;
-
 use futures::StreamExt;
 use roux::Subreddit;
 use roux_stream::stream_submissions;
+use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
-
 
 #[tokio::main]
 async fn main() {
@@ -309,6 +373,7 @@ async fn main() {
         &subreddit,
         Duration::from_secs(60),
         retry_strategy,
+        Some(Duration::from_secs(10)),
     );
 
     while let Some(submission) = stream.next().await {
@@ -341,15 +406,16 @@ pub fn stream_submissions<R, I>(
     subreddit: &Subreddit,
     sleep_time: Duration,
     retry_strategy: R,
+    timeout: Option<Duration>,
 ) -> (
-    impl Stream<Item = Result<SubmissionsData, RouxError>>,
+    impl Stream<Item = Result<SubmissionsData, StreamError<RouxError>>>,
     JoinHandle<Result<(), mpsc::SendError>>,
 )
 where
     R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
     I: Iterator<Item = Duration> + Send + Sync + 'static,
 {
-    stream_items(subreddit, sleep_time, retry_strategy)
+    stream_items(subreddit, sleep_time, retry_strategy, timeout)
 }
 
 /**
@@ -371,6 +437,9 @@ if none of those items has been seen in the previous call: this indicates
 a potential miss of new content and suggests that a smaller `sleep_time`
 should be chosen. Enable debug logging for more statistics.
 
+If `timeout` is not `None` then calls to the Reddit API that take longer
+than `timeout` are aborted with a [`StreamError::TimeoutError`].
+
 If an error occurs while fetching the latest comments from Reddit then
 fetching is retried according to `retry_strategy` (see [`tokio_retry`] for
 details). If one of the retries succeeds then normal operation is resumed.
@@ -390,11 +459,10 @@ The following example prints new comments to
 [r/AskReddit](https://reddit.com/r/AskReddit) in an endless loop.
 
 ```
-use std::time::Duration;
-
 use futures::StreamExt;
 use roux::Subreddit;
 use roux_stream::stream_comments;
+use std::time::Duration;
 use tokio_retry::strategy::ExponentialBackoff;
 
 
@@ -411,6 +479,7 @@ async fn main() {
         &subreddit,
         Duration::from_secs(10),
         retry_strategy,
+        Some(Duration::from_secs(10)),
     );
 
     while let Some(comment) = stream.next().await {
@@ -448,27 +517,28 @@ pub fn stream_comments<R, I>(
     subreddit: &Subreddit,
     sleep_time: Duration,
     retry_strategy: R,
+    timeout: Option<Duration>,
 ) -> (
-    impl Stream<Item = Result<SubredditCommentsData, RouxError>>,
+    impl Stream<Item = Result<SubredditCommentsData, StreamError<RouxError>>>,
     JoinHandle<Result<(), mpsc::SendError>>,
 )
 where
     R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
     I: Iterator<Item = Duration> + Send + Sync + 'static,
 {
-    stream_items(subreddit, sleep_time, retry_strategy)
+    stream_items(subreddit, sleep_time, retry_strategy, timeout)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{pull_into_sink, Puller};
+    use super::{pull_into_sink, Puller, StreamError};
     use async_trait::async_trait;
     use futures::{channel::mpsc, StreamExt};
     use log::{Level, LevelFilter};
     use logtest::Logger;
     use roux::responses::{BasicThing, Listing};
     use std::{error::Error, fmt::Display, time::Duration};
-    use tokio::sync::RwLock;
+    use tokio::{sync::RwLock, time::sleep};
 
     /*
     Any test case that checks the logging output must run in isolation,
@@ -479,15 +549,15 @@ mod tests {
     static LOCK: RwLock<()> = RwLock::const_new(());
 
     #[derive(Debug, PartialEq)]
-    struct PullerError(String);
+    struct MockSourceError(String);
 
-    impl Display for PullerError {
+    impl Display for MockSourceError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "{}", self.0)
         }
     }
 
-    impl Error for PullerError {}
+    impl Error for MockSourceError {}
 
     struct MockPuller {
         iter: Box<dyn Iterator<Item = Vec<String>> + Sync + Send>,
@@ -508,20 +578,27 @@ mod tests {
     }
 
     #[async_trait]
-    impl Puller<String, PullerError> for MockPuller {
+    impl Puller<String, MockSourceError> for MockPuller {
         /*
         Each call to `pull` returns the next batch of items. If a batch
         consists of a single String that begins with "error" then instead
-        of an Ok an Err is returned.
+        of an Ok an Err is returned. If a batch consists of a single String
+        that begins with "sleep" then the function sleeps for 1s before
+        returning.
         */
-        async fn pull(&mut self) -> Result<BasicThing<Listing<BasicThing<String>>>, PullerError> {
+        async fn pull(
+            &mut self,
+        ) -> Result<BasicThing<Listing<BasicThing<String>>>, MockSourceError> {
             let children;
             if let Some(items) = self.iter.next() {
                 match items.as_slice() {
                     [item] if item.starts_with("error") => {
-                        return Err(PullerError(item.clone()));
+                        return Err(MockSourceError(item.clone()));
                     }
                     _ => {
+                        if items.len() == 1 && items.get(0).unwrap().starts_with("sleep") {
+                            sleep(Duration::from_secs(1)).await;
+                        }
                         children = items
                             .iter()
                             .map(|item| BasicThing {
@@ -565,7 +642,8 @@ mod tests {
     async fn check<R, I>(
         responses: Vec<Vec<&str>>,
         retry_strategy: R,
-        expected: Vec<Result<&str, PullerError>>,
+        timeout: Option<Duration>,
+        expected: Vec<Result<&str, StreamError<MockSourceError>>>,
     ) where
         R: IntoIterator<IntoIter = I, Item = Duration> + Clone + Send + Sync + 'static,
         I: Iterator<Item = Duration> + Send + Sync + 'static,
@@ -577,6 +655,7 @@ mod tests {
                 &mut mock_puller,
                 Duration::from_millis(1),
                 retry_strategy,
+                timeout,
                 sink,
             )
             .await
@@ -594,7 +673,7 @@ mod tests {
     #[tokio::test]
     async fn test_simple_pull() {
         let _lock = LOCK.read().await;
-        check(vec![vec!["hello"]], vec![], vec![Ok("hello")]).await;
+        check(vec![vec!["hello"]], vec![], None, vec![Ok("hello")]).await;
     }
 
     #[tokio::test]
@@ -603,6 +682,7 @@ mod tests {
         check(
             vec![vec!["a", "b", "c"], vec!["b", "c", "d"], vec!["d", "e"]],
             vec![],
+            None,
             vec![Ok("a"), Ok("b"), Ok("c"), Ok("d"), Ok("e")],
         )
         .await;
@@ -619,6 +699,7 @@ mod tests {
                 vec!["b", "c", "d"],
             ],
             vec![Duration::from_millis(1), Duration::from_millis(1)],
+            None,
             vec![Ok("a"), Ok("b"), Ok("c"), Ok("d")],
         )
         .await;
@@ -635,11 +716,14 @@ mod tests {
                 vec!["b", "c", "d"],
             ],
             vec![Duration::from_millis(1)],
+            None,
             vec![
                 Ok("a"),
                 Ok("b"),
                 Ok("c"),
-                Err(PullerError("error2".to_owned())),
+                Err(StreamError::SourceError(MockSourceError(
+                    "error2".to_owned(),
+                ))),
                 Ok("d"),
             ],
         )
@@ -654,6 +738,7 @@ mod tests {
         check(
             vec![vec!["a", "b"], vec!["c", "d"]],
             vec![],
+            None,
             vec![Ok("a"), Ok("b"), Ok("c"), Ok("d")],
         )
         .await;
@@ -684,7 +769,14 @@ mod tests {
         let (sink, stream) = mpsc::unbounded();
         drop(stream); // drop receiver so that sending fails
         let join_handle = tokio::spawn(async move {
-            pull_into_sink(&mut mock_puller, Duration::from_millis(1), vec![], sink).await
+            pull_into_sink(
+                &mut mock_puller,
+                Duration::from_millis(1),
+                vec![],
+                None,
+                sink,
+            )
+            .await
         });
         let result = join_handle.await.unwrap();
         assert!(result.is_err());
@@ -697,9 +789,68 @@ mod tests {
         let (sink, stream) = mpsc::unbounded();
         drop(stream); // drop receiver so that sending fails
         let join_handle = tokio::spawn(async move {
-            pull_into_sink(&mut mock_puller, Duration::from_millis(1), vec![], sink).await
+            pull_into_sink(
+                &mut mock_puller,
+                Duration::from_millis(1),
+                vec![],
+                None,
+                sink,
+            )
+            .await
         });
         let result = join_handle.await.unwrap();
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_timeout_ok() {
+        let _lock = LOCK.read().await;
+        check(
+            vec![vec!["a", "b", "c"], vec!["b", "c", "d"]],
+            vec![],
+            Some(Duration::from_secs(1)),
+            vec![Ok("a"), Ok("b"), Ok("c"), Ok("d")],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_timeout_error() {
+        let _lock = LOCK.read().await;
+
+        let timeout = Duration::from_millis(100);
+
+        // There is probably a less stupid way of constructing
+        // an instance of Elapsed...
+        let elapsed = tokio::time::timeout(timeout.clone(), sleep(Duration::from_secs(1)))
+            .await
+            .unwrap_err();
+
+        check(
+            vec![vec!["a", "b", "c"], vec!["sleep"], vec!["b", "c", "d"]],
+            vec![],
+            Some(timeout),
+            vec![
+                Ok("a"),
+                Ok("b"),
+                Ok("c"),
+                Err(StreamError::TimeoutError(elapsed)),
+                Ok("d"),
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_timeout_retry() {
+        let _lock = LOCK.read().await;
+
+        check(
+            vec![vec!["a", "b", "c"], vec!["sleep"], vec!["b", "c", "d"]],
+            vec![Duration::from_millis(1)],
+            Some(Duration::from_millis(100)),
+            vec![Ok("a"), Ok("b"), Ok("c"), Ok("d")],
+        )
+        .await;
     }
 }

@@ -34,9 +34,11 @@ use roux::{
 use tokio::time::Duration;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 
-async fn submission_reader<S>(stream: &mut S) -> Result<(), RouxError>
+use roux_stream::StreamError;
+
+async fn submission_reader<S>(stream: &mut S) -> Result<(), StreamError<RouxError>>
 where
-    S: Stream<Item = Result<SubmissionsData, RouxError>> + Unpin,
+    S: Stream<Item = Result<SubmissionsData, StreamError<RouxError>>> + Unpin,
 {
     while let Some(submission) = stream.next().await {
         let submission = submission?;
@@ -48,9 +50,9 @@ where
     Ok(())
 }
 
-async fn comment_reader<S>(stream: &mut S) -> Result<(), RouxError>
+async fn comment_reader<S>(stream: &mut S) -> Result<(), StreamError<RouxError>>
 where
-    S: Stream<Item = Result<SubredditCommentsData, RouxError>> + Unpin,
+    S: Stream<Item = Result<SubredditCommentsData, StreamError<RouxError>>> + Unpin,
 {
     while let Some(comment) = stream.next().await {
         let comment = comment?;
@@ -79,13 +81,21 @@ async fn main() {
         .map(jitter) // add jitter to delays
         .take(3); // limit to 3 retries
 
+    // Abort fetching new items after 10s
+    let timeout = Duration::from_secs(10);
+
     let (mut submissions_stream, submissions_handle) = roux_stream::stream_submissions(
         &subreddit,
         Duration::from_secs(60),
         retry_strategy.clone(),
+        Some(timeout.clone()),
     );
-    let (mut comments_stream, comments_handle) =
-        roux_stream::stream_comments(&subreddit, Duration::from_secs(10), retry_strategy.clone());
+    let (mut comments_stream, comments_handle) = roux_stream::stream_comments(
+        &subreddit,
+        Duration::from_secs(10),
+        retry_strategy.clone(),
+        Some(timeout.clone()),
+    );
 
     let (submission_result, comment_result) = tokio::join!(
         submission_reader(&mut submissions_stream),

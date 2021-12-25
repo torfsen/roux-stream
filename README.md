@@ -1,3 +1,5 @@
+[![Build](https://github.com/torfsen/roux-stream/actions/workflows/build.yml/badge.svg)](https://github.com/torfsen/roux-stream/actions/workflows/build.yml)
+
 # `roux-stream`
 
 A streaming API for the Rust Reddit client

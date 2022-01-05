@@ -31,7 +31,7 @@ Distributed under the MIT license. See the file `LICENSE` for details.
 See the file `CHANGELOG.md`.
 
 
-# Development
+## Development
 
 Clone the repository:
 

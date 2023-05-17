@@ -1,4 +1,8 @@
 /target
 /TODO
 
+# Library projects should gitignore Cargo.lock, see
+# https://github.com/rust-lang/cargo/issues/315
+/Cargo.lock
+
 .*.sw?

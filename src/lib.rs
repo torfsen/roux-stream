@@ -43,9 +43,10 @@ use futures::channel::mpsc;
 use futures::Stream;
 use futures::{Sink, SinkExt};
 use log::{debug, warn};
-use roux::responses::{BasicThing, Listing};
+use roux::response::{BasicThing, Listing};
 use roux::{
-    subreddit::responses::{SubmissionsData, SubredditCommentsData},
+    comment::CommentData,
+    submission::SubmissionData,
     util::RouxError,
     Subreddit,
 };
@@ -88,14 +89,14 @@ struct SubredditPuller {
 const LIMIT: u32 = 100;
 
 #[async_trait]
-impl Puller<SubmissionsData, RouxError> for SubredditPuller {
+impl Puller<SubmissionData, RouxError> for SubredditPuller {
     async fn pull(
         &mut self,
-    ) -> Result<BasicThing<Listing<BasicThing<SubmissionsData>>>, RouxError> {
+    ) -> Result<BasicThing<Listing<BasicThing<SubmissionData>>>, RouxError> {
         self.subreddit.latest(LIMIT, None).await
     }
 
-    fn get_id(&self, data: &SubmissionsData) -> String {
+    fn get_id(&self, data: &SubmissionData) -> String {
         data.id.clone()
     }
 
@@ -109,14 +110,14 @@ impl Puller<SubmissionsData, RouxError> for SubredditPuller {
 }
 
 #[async_trait]
-impl Puller<SubredditCommentsData, RouxError> for SubredditPuller {
+impl Puller<CommentData, RouxError> for SubredditPuller {
     async fn pull(
         &mut self,
-    ) -> Result<BasicThing<Listing<BasicThing<SubredditCommentsData>>>, RouxError> {
+    ) -> Result<BasicThing<Listing<BasicThing<CommentData>>>, RouxError> {
         self.subreddit.latest_comments(None, Some(LIMIT)).await
     }
 
-    fn get_id(&self, data: &SubredditCommentsData) -> String {
+    fn get_id(&self, data: &CommentData) -> String {
         data.id.as_ref().cloned().unwrap()
     }
 
@@ -408,7 +409,7 @@ pub fn stream_submissions<R, I>(
     retry_strategy: R,
     timeout: Option<Duration>,
 ) -> (
-    impl Stream<Item = Result<SubmissionsData, StreamError<RouxError>>>,
+    impl Stream<Item = Result<SubmissionData, StreamError<RouxError>>>,
     JoinHandle<Result<(), mpsc::SendError>>,
 )
 where
@@ -519,7 +520,7 @@ pub fn stream_comments<R, I>(
     retry_strategy: R,
     timeout: Option<Duration>,
 ) -> (
-    impl Stream<Item = Result<SubredditCommentsData, StreamError<RouxError>>>,
+    impl Stream<Item = Result<CommentData, StreamError<RouxError>>>,
     JoinHandle<Result<(), mpsc::SendError>>,
 )
 where
@@ -536,7 +537,7 @@ mod tests {
     use futures::{channel::mpsc, StreamExt};
     use log::{Level, LevelFilter};
     use logtest::Logger;
-    use roux::responses::{BasicThing, Listing};
+    use roux::response::{BasicThing, Listing};
     use std::{error::Error, fmt::Display, time::Duration};
     use tokio::{sync::RwLock, time::sleep};
 
@@ -602,7 +603,7 @@ mod tests {
                         children = items
                             .iter()
                             .map(|item| BasicThing {
-                                kind: "mock".to_owned(),
+                                kind: Some("mock".to_owned()),
                                 data: item.clone(),
                             })
                             .collect();
@@ -620,7 +621,7 @@ mod tests {
                 children: children,
             };
             let result = BasicThing {
-                kind: "listing".to_owned(),
+                kind: Some("listing".to_owned()),
                 data: listing,
             };
             Ok(result)

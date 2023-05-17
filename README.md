@@ -23,12 +23,21 @@ found in the file [`examples/submissions-and-comments.rs`](https://github.com/to
 
 ## License
 
-Distributed under the MIT license. See the file `LICENSE` for details.
+Distributed under the MIT license. See the file [`LICENSE`](LICENSE) for
+details.
 
 
 ## Changelog
 
-See the file `CHANGELOG.md`.
+See the file [`CHANGELOG.md`](CHANGELOG.md).
+
+
+## Contributors
+
+* [@torfsen](https://github.com/torfsen)
+* [@fourbytes](https://github.com/fourbytes)
+* [@dark0dave](https://github.com/dark0dave)
+* [@asad-awadia](https://github.com/asad-awadia)
 
 
 ## Development
@@ -44,4 +53,10 @@ Run the tests:
 
 ```bash
 cargo test
+```
+
+Run the example in `examples/submissions-and-comments.rs`:
+
+```bash
+cargo run --example submissions-and-comments
 ```

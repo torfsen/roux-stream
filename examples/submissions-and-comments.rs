@@ -22,7 +22,9 @@ THE SOFTWARE.
 
 /*
 This example illustrates how to listen for both new submissions and new
-comments at the same time.
+comments at the same time. You can run it using
+
+    cargo run --example submissions-and-comments
  */
 
 use futures::{Stream, StreamExt};

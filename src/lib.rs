@@ -603,7 +603,7 @@ mod tests {
                         children = items
                             .iter()
                             .map(|item| BasicThing {
-                                kind: "mock".to_owned(),
+                                kind: Some("mock".to_owned()),
                                 data: item.clone(),
                             })
                             .collect();
@@ -621,7 +621,7 @@ mod tests {
                 children: children,
             };
             let result = BasicThing {
-                kind: "listing".to_owned(),
+                kind: Some("listing".to_owned()),
                 data: listing,
             };
             Ok(result)
